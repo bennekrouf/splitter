@@ -11,6 +11,6 @@ crossbeam-channel.workspace = true
 dirs.workspace = true
 symphonia.workspace = true
 cpal.workspace = true
-
-[dev-dependencies]
-mp3lame-encoder = "0.2"
+flacenc.workspace = true
+splitter-core.workspace = true
+mp3lame-encoder.workspace = true

@@ -6,7 +6,8 @@ mod ring;
 pub mod scan;
 pub mod scanner;
 pub mod source;
+pub mod transcode;
 
-pub use player::Player;
+pub use player::{AltPcm, Player};
 pub use scan::{Bitrate, Scan, SourceInfo};
 pub use scanner::{ScanEvent, Scanner};

@@ -20,6 +20,8 @@ cpal = "0.15"
 dioxus = { version = "0.7", features = ["desktop"] }
 tokio = { version = "1", features = ["time"] }
 rfd = "0.15"
+flacenc = "0.5"
+mp3lame-encoder = "0.2"
 
 # Decoding and peak building are far too slow unoptimised; keep debug builds usable.
 [profile.dev.package."*"]

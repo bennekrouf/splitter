@@ -328,3 +328,28 @@ button:disabled { opacity: 0.45; }
 .match.todo { color: var(--todo); }
 .preview { margin: 0; padding-left: 22px; max-height: 150px; overflow-y: auto; color: var(--text); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Export format and A/B */
+select.profile {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.warnings { color: var(--todo); font-size: 12px; display: flex; flex-direction: column; gap: 2px; margin-top: -4px; }
+.ab-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: rgba(190, 140, 255, 0.14);
+  border-left: 1px solid rgba(190, 140, 255, 0.7);
+  border-right: 1px solid rgba(190, 140, 255, 0.7);
+}
+.ab-window.preparing { background: repeating-linear-gradient(90deg, rgba(190, 140, 255, 0.08) 0 8px, transparent 8px 16px); }
+.ab-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.ab-side { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+.ab-side.on { color: #111; background: var(--accent); border-color: var(--accent); }
+.ab-side.on.enc { background: #be8cff; border-color: #be8cff; }

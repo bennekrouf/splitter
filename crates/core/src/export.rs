@@ -8,12 +8,145 @@ pub struct ExportSettings {
     /// File name template: `{n}` track number, `{nn}` zero-padded, `{title}`, `{source}`
     /// (the recording's file name without extension).
     pub naming: String,
+    #[serde(default)]
+    pub profile: Profile,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { naming: "{nn} - {title}".into() }
+        Self { naming: "{nn} - {title}".into(), profile: Profile::Original }
     }
+}
+
+/// Output format of an export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Profile {
+    /// Lossless copy in the source's own format (MP3 frames or WAV bytes).
+    #[default]
+    Original,
+    /// LAME VBR, `-V quality` (0 = best).
+    Mp3Vbr { quality: u8 },
+    Mp3Cbr { kbps: u16 },
+    Flac,
+    /// 16-bit PCM WAV.
+    Wav16,
+}
+
+/// What the size estimate and warnings need to know about the source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceFacts {
+    /// MP3 (or another lossy codec).
+    pub lossy: bool,
+    /// Average bitrate of the file's audio.
+    pub kbps: u32,
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// Bits per sample for PCM sources.
+    pub bits: Option<u32>,
+}
+
+impl Profile {
+    pub const CHOICES: [Profile; 10] = [
+        Profile::Original,
+        Profile::Mp3Vbr { quality: 0 },
+        Profile::Mp3Vbr { quality: 2 },
+        Profile::Mp3Vbr { quality: 4 },
+        Profile::Mp3Cbr { kbps: 320 },
+        Profile::Mp3Cbr { kbps: 256 },
+        Profile::Mp3Cbr { kbps: 192 },
+        Profile::Mp3Cbr { kbps: 128 },
+        Profile::Flac,
+        Profile::Wav16,
+    ];
+
+    pub fn label(&self) -> String {
+        match self {
+            Profile::Original => "Original (lossless copy)".into(),
+            Profile::Mp3Vbr { quality } => format!("MP3 VBR V{quality} (~{} kbps)", vbr_kbps(*quality)),
+            Profile::Mp3Cbr { kbps } => format!("MP3 CBR {kbps} kbps"),
+            Profile::Flac => "FLAC (lossless)".into(),
+            Profile::Wav16 => "WAV 16-bit".into(),
+        }
+    }
+
+    /// Short name for compact places, e.g. the A/B indicator.
+    pub fn short(&self) -> String {
+        match self {
+            Profile::Original => "Original".into(),
+            Profile::Mp3Vbr { quality } => format!("MP3 V{quality}"),
+            Profile::Mp3Cbr { kbps } => format!("MP3 {kbps}k"),
+            Profile::Flac => "FLAC".into(),
+            Profile::Wav16 => "WAV 16".into(),
+        }
+    }
+
+    pub fn extension<'a>(&self, source_ext: &'a str) -> &'a str {
+        match self {
+            Profile::Original => source_ext,
+            Profile::Mp3Vbr { .. } | Profile::Mp3Cbr { .. } => "mp3",
+            Profile::Flac => "flac",
+            Profile::Wav16 => "wav",
+        }
+    }
+
+    /// Whether the output can differ audibly from the source.
+    pub fn is_lossy(&self) -> bool {
+        matches!(self, Profile::Mp3Vbr { .. } | Profile::Mp3Cbr { .. })
+    }
+
+    /// Estimated output size for `secs` of audio.
+    pub fn estimate_bytes(&self, src: &SourceFacts, secs: f64) -> u64 {
+        let pcm16 = src.sample_rate as f64 * src.channels as f64 * 2.0 * secs;
+        let bytes = match self {
+            Profile::Original => src.kbps as f64 * 125.0 * secs,
+            Profile::Mp3Vbr { quality } => vbr_kbps(*quality) as f64 * 125.0 * secs,
+            Profile::Mp3Cbr { kbps } => *kbps as f64 * 125.0 * secs,
+            // Typical for music; decoded MP3 compresses a little better than that.
+            Profile::Flac => pcm16 * src.bits.map_or(1.0, |b| b as f64 / 16.0).max(1.0) * 0.58,
+            Profile::Wav16 => pcm16,
+        };
+        bytes as u64
+    }
+
+    /// Things worth knowing before exporting `src` with this profile.
+    pub fn warnings(&self, src: &SourceFacts) -> Vec<String> {
+        let mut w = Vec::new();
+        let target_kbps = match self {
+            Profile::Mp3Vbr { quality } => Some(vbr_kbps(*quality)),
+            Profile::Mp3Cbr { kbps } => Some(*kbps as u32),
+            _ => None,
+        };
+        match (src.lossy, self) {
+            (true, Profile::Flac | Profile::Wav16) => w.push(format!(
+                "The source is MP3 (~{} kbps): {} keeps exactly that quality in a much larger file.",
+                src.kbps,
+                self.short()
+            )),
+            (true, p) if p.is_lossy() => {
+                w.push("Re-encoding MP3 loses a little quality; Original keeps the source exactly.".into());
+                if let Some(t) = target_kbps.filter(|&t| t as f64 > src.kbps as f64 * 1.15) {
+                    w.push(format!(
+                        "The source is only ~{} kbps: {t} kbps makes files bigger without sounding better.",
+                        src.kbps
+                    ));
+                }
+            }
+            _ => {}
+        }
+        if *self == Profile::Wav16 && src.bits.is_some_and(|b| b > 16) {
+            w.push(format!("Reduces the {}-bit source to 16-bit.", src.bits.unwrap()));
+        }
+        if self.is_lossy() && src.sample_rate > 48_000 {
+            w.push(format!("MP3 tops out at 48 kHz; the {} Hz source will be resampled.", src.sample_rate));
+        }
+        w
+    }
+}
+
+/// Typical average bitrate of LAME `-V` presets.
+pub fn vbr_kbps(quality: u8) -> u32 {
+    [245, 225, 190, 175, 165, 130, 115, 100, 85, 65][quality.min(9) as usize]
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,9 +227,32 @@ mod tests {
         e.insert(Split::confirmed(100));
         e.head.title = "Jam".into();
         e.track_meta_mut(1).unwrap().title = "Jam".into();
-        let s = ExportSettings { naming: "{title}".into() };
+        let s = ExportSettings { naming: "{title}".into(), ..Default::default() };
         let names: Vec<String> = plan(&e, 200, "set", &s).into_iter().map(|t| t.stem).collect();
         assert_eq!(names, ["Jam", "Jam (2)"]);
+    }
+
+    #[test]
+    fn profile_warnings_and_sizes() {
+        let mp3 = SourceFacts { lossy: true, kbps: 128, sample_rate: 44100, channels: 2, bits: None };
+        let wav = SourceFacts { lossy: false, kbps: 1411, sample_rate: 44100, channels: 2, bits: Some(16) };
+        assert!(Profile::Original.warnings(&mp3).is_empty());
+        assert_eq!(Profile::Mp3Cbr { kbps: 320 }.warnings(&mp3).len(), 2, "re-encode + upsized bitrate");
+        assert_eq!(Profile::Mp3Cbr { kbps: 128 }.warnings(&mp3).len(), 1);
+        assert_eq!(Profile::Flac.warnings(&mp3).len(), 1);
+        assert!(Profile::Mp3Vbr { quality: 2 }.warnings(&wav).is_empty());
+        // One minute: 128 kbps = 960 kB; CD audio = 10.6 MB.
+        assert_eq!(Profile::Original.estimate_bytes(&mp3, 60.0), 960_000);
+        assert_eq!(Profile::Wav16.estimate_bytes(&wav, 60.0), 10_584_000);
+        assert_eq!(Profile::Flac.extension("wav"), "flac");
+        assert_eq!(Profile::Original.extension("wav"), "wav");
+    }
+
+    #[test]
+    fn profile_serializes_readably() {
+        let json = serde_json::to_string(&Profile::Mp3Vbr { quality: 2 }).unwrap();
+        assert_eq!(json, r#"{"kind":"mp3_vbr","quality":2}"#);
+        assert_eq!(serde_json::from_str::<Profile>(r#"{"kind":"flac"}"#).unwrap(), Profile::Flac);
     }
 
     #[test]

@@ -1,10 +1,12 @@
+use crate::ab::AbState;
+use crate::exporting::source_facts;
 use crate::state::{self, key_of, ExportState, ScanState};
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
 use splitter_audio::{Bitrate, Scan};
 use splitter_core::edit::SplitState;
 use splitter_core::time::{fmt_precise, fmt_short};
-use splitter_core::export::plan;
+use splitter_core::export::{plan, Profile};
 use splitter_core::tracklist;
 use splitter_core::Status;
 use std::fmt::Write;
@@ -143,9 +145,17 @@ pub fn App() -> Element {
                 app.export_current();
                 true
             }
+            Code::KeyA if !cmd => {
+                app.ab_toggle();
+                true
+            }
             Code::Escape => {
-                let mut cur = app.cur_split;
-                cur.set(None);
+                if *app.ab.peek() != AbState::Off {
+                    app.ab_stop();
+                } else {
+                    let mut cur = app.cur_split;
+                    cur.set(None);
+                }
                 true
             }
             _ => false,
@@ -507,6 +517,7 @@ fn Overview(scan: ScanRef) -> Element {
         div { class: "overview",
             Wave { scan: scan.clone(), start: 0, end: total }
             Dropped { total, start: 0, end: total }
+            AbBand { start: 0, end: total }
             Markers { start: 0, end: total, detail: false }
             div { class: "window", style: "left: {left}%; width: {width}%" }
             Playhead { start: 0, end: total }
@@ -552,6 +563,7 @@ fn Detail(scan: ScanRef) -> Element {
             div { class: "detail-wave",
                 Wave { scan: scan.clone(), start, end }
                 Dropped { total: scan.0.info.total_samples, start, end }
+                AbBand { start, end }
                 Markers { start, end, detail: true }
                 Playhead { start, end }
                 Interact { start, end, center: false, edit_splits: true }
@@ -577,6 +589,7 @@ fn Transport(scan: ScanRef) -> Element {
             }
             span { class: "time", "{fmt_precise(pos)}" }
             span { class: "time dim", "/ {fmt_precise(total)}" }
+            AbStatus {}
             span { class: "spacer" }
             button { onclick: move |_| app.zoom(2.0), "−" }
             span { class: "zoom", "{span:.0} s view" }
@@ -675,10 +688,25 @@ fn ExportBar(scan: ScanRef) -> Element {
     let key = key_of(&path);
     let Some(edit) = cutlist.recordings.get(&key) else { return rsx! {} };
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let count = plan(edit, scan.0.info.total_samples, &stem, &cutlist.export).len();
+    let planned = plan(edit, scan.0.info.total_samples, &stem, &cutlist.export);
+    let count = planned.len();
     let dropped = edit.splits.len() + 1 - count;
     let state = app.export.read().clone();
     let running = matches!(state, ExportState::Running { .. });
+    let profile = cutlist.export.profile;
+    let info = &scan.0.info;
+    let facts = source_facts(info, scan.0.mp3.is_some());
+    let secs: f64 = planned.iter().map(|t| (t.end - t.start) as f64).sum::<f64>() / info.sample_rate as f64;
+    let bytes = if profile == Profile::Original {
+        // Exact for the source's own format: its share of the file.
+        (info.file_size as f64 * secs / info.duration_secs().max(1e-9)) as u64
+    } else {
+        profile.estimate_bytes(&facts, secs)
+    };
+    let size = fmt_bytes(bytes);
+    let warnings = profile.warnings(&facts);
+    let ext = profile.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
+    let selected_idx = Profile::CHOICES.iter().position(|p| *p == profile).unwrap_or(0);
 
     rsx! {
         div { class: "export-bar",
@@ -688,10 +716,32 @@ fn ExportBar(scan: ScanRef) -> Element {
                 },
                 "Paste tracklist…"
             }
+            select {
+                class: "profile",
+                title: "Export format",
+                value: "{selected_idx}",
+                onchange: move |e| {
+                    if let Some(p) = e.value().parse::<usize>().ok().and_then(|i| Profile::CHOICES.get(i)) {
+                        app.set_profile(*p);
+                    }
+                    app.focus_root();
+                },
+                for (i, p) in Profile::CHOICES.iter().enumerate() {
+                    option { key: "{i}", value: "{i}", selected: i == selected_idx, "{p.label()}" }
+                }
+            }
+            button {
+                class: if profile.is_lossy() { "ab-button" } else { "ab-button dim" },
+                title: "Loop 12 s from the playhead and switch between the original and this format (A)",
+                disabled: profile == Profile::Original,
+                onclick: move |_| app.ab_toggle(),
+                "A/B"
+                kbd { "A" }
+            }
             span { class: "dim",
-                "{count} tracks to export"
+                "{count} tracks · ≈ {size}"
                 if dropped > 0 { " · {dropped} left out" }
-                " → {stem}/"
+                " → {stem}/*.{ext}"
             }
             span { class: "spacer" }
             match state {
@@ -713,6 +763,60 @@ fn ExportBar(scan: ScanRef) -> Element {
                 kbd { "⌘E" }
             }
         }
+        if !warnings.is_empty() {
+            div { class: "warnings",
+                for (i, w) in warnings.into_iter().enumerate() {
+                    div { key: "{i}", "⚠ {w}" }
+                }
+            }
+        }
+    }
+}
+
+fn fmt_bytes(b: u64) -> String {
+    match b {
+        b if b >= 1_000_000_000 => format!("{:.1} GB", b as f64 / 1e9),
+        b if b >= 1_000_000 => format!("{:.0} MB", b as f64 / 1e6),
+        b => format!("{:.0} kB", b as f64 / 1e3),
+    }
+}
+
+/// The compared window while A/B is on.
+#[component]
+fn AbBand(start: u64, end: u64) -> Element {
+    let app = use_context::<state::App>();
+    let (a, b, ready) = match (app.ab)() {
+        AbState::Preparing { start, end, .. } => (start, end, false),
+        AbState::Ready { start, end, .. } => (start, end, true),
+        AbState::Off => return rsx! {},
+    };
+    if end <= start || b <= start || a >= end {
+        return rsx! {};
+    }
+    let span = (end - start) as f64;
+    let left = (a.max(start) - start) as f64 / span * 100.0;
+    let width = (b.min(end) - a.max(start)) as f64 / span * 100.0;
+    rsx! {
+        div { class: if ready { "ab-window" } else { "ab-window preparing" }, style: "left: {left}%; width: {width}%" }
+    }
+}
+
+/// Which side of the A/B is playing.
+#[component]
+fn AbStatus() -> Element {
+    let app = use_context::<state::App>();
+    match (app.ab)() {
+        AbState::Off => rsx! {},
+        AbState::Preparing { profile, .. } => rsx! {
+            span { class: "ab-status", "Encoding a {profile.short()} preview…" }
+        },
+        AbState::Ready { profile, encoded, .. } => rsx! {
+            span { class: "ab-status",
+                span { class: if encoded { "ab-side" } else { "ab-side on" }, "A · Original" }
+                span { class: if encoded { "ab-side on enc" } else { "ab-side" }, "B · {profile.short()}" }
+                span { class: "dim", " A switch · Esc stop" }
+            }
+        },
     }
 }
 
@@ -935,7 +1039,7 @@ fn Keys() -> Element {
         ("⌘Z", "undo"),
         ("⌘Enter", "file done"),
     ];
-    let tracks = [("T", "title"), ("X", "leave out / keep"), ("⌘E", "export")];
+    let tracks = [("T", "title"), ("X", "leave out / keep"), ("A", "A/B compare"), ("⌘E", "export")];
     let nav = [
         ("Space", "play / pause"),
         ("← →", "±5 s (⇧ 0.5 s, ⌥ 10 ms)"),

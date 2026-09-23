@@ -201,6 +201,59 @@ impl PcmSource for GenericSource {
     }
 }
 
+/// Decoded audio held in memory covering source frames `[start, start + len)`, e.g. an
+/// encoded A/B preview. Reads outside that window are silent.
+pub struct MemPcm {
+    pcm: Arc<Vec<f32>>,
+    channels: usize,
+    rate: u32,
+    start: u64,
+    pos: u64,
+}
+
+impl MemPcm {
+    pub fn new(pcm: Arc<Vec<f32>>, channels: usize, rate: u32, start: u64) -> Self {
+        Self { pcm, channels, rate, start, pos: start }
+    }
+
+    fn end(&self) -> u64 {
+        self.start + (self.pcm.len() / self.channels) as u64
+    }
+}
+
+impl PcmSource for MemPcm {
+    fn channels(&self) -> usize {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+
+    fn seek(&mut self, frame: u64) -> Result<()> {
+        self.pos = frame;
+        Ok(())
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
+        const CHUNK: u64 = 4096;
+        if self.pos >= self.end() {
+            return Ok(false);
+        }
+        if self.pos < self.start {
+            let n = CHUNK.min(self.start - self.pos);
+            out.extend(std::iter::repeat_n(0.0, n as usize * self.channels));
+            self.pos += n;
+            return Ok(true);
+        }
+        let n = CHUNK.min(self.end() - self.pos);
+        let from = (self.pos - self.start) as usize * self.channels;
+        out.extend_from_slice(&self.pcm[from..from + n as usize * self.channels]);
+        self.pos += n;
+        Ok(true)
+    }
+}
+
 /// A byte range `[start, end)` of a file presented as a whole stream. Reported as
 /// non-seekable so `MpaReader` doesn't scan the file to estimate its duration.
 struct FileSlice {

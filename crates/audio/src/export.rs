@@ -11,7 +11,11 @@
 //! **WAV**: the sample bytes are copied with the original `fmt ` chunk, so it is bit-exact.
 
 use crate::mp3index::{parse_header, Mp3Index};
-use crate::scan::Scan;
+use crate::scan::{Bitrate, Scan};
+use crate::source::open_source;
+use crate::transcode::encode_track;
+use splitter_core::export::Profile;
+use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
@@ -42,12 +46,26 @@ pub struct ExportJob {
     pub tags: Tags,
 }
 
-/// Write every job. `progress` is called with the number of files finished.
-pub fn export(source: &Path, scan: &Scan, jobs: &[ExportJob], progress: &mut dyn FnMut(usize)) -> Result<()> {
+/// Write every job with `profile`. `progress` is called with the number of files finished.
+pub fn export(
+    source: &Path,
+    scan: &Scan,
+    jobs: &[ExportJob],
+    profile: Profile,
+    progress: &mut dyn FnMut(usize),
+) -> Result<()> {
     let mut src = File::open(source).with_context(|| format!("opening {}", source.display()))?;
-    let wav = match &scan.mp3 {
-        Some(_) => None,
-        None => Some(WavLayout::read(&mut src).context("reading the WAV structure")?),
+    let wav = match (&scan.mp3, profile) {
+        (None, Profile::Original) => Some(WavLayout::read(&mut src).context("reading the WAV structure")?),
+        _ => None,
+    };
+    let mut pcm = match profile {
+        Profile::Original => None,
+        _ => Some(open_source(source, scan.mp3.clone().map(Arc::new))?),
+    };
+    let bits = match scan.info.bitrate {
+        Bitrate::Pcm { bits, .. } => Some(bits),
+        _ => None,
     };
     for (i, job) in jobs.iter().enumerate() {
         if let Some(dir) = job.path.parent() {
@@ -55,9 +73,15 @@ pub fn export(source: &Path, scan: &Scan, jobs: &[ExportJob], progress: &mut dyn
         }
         // Write to a temporary name, so a failed export never leaves a half-written track.
         let tmp = job.path.with_extension("part");
-        let result = match (&scan.mp3, &wav) {
-            (Some(index), _) => write_mp3(&mut src, index, job, &tmp),
-            (None, Some(layout)) => write_wav(&mut src, layout, job, &tmp),
+        let result = match (&mut pcm, &scan.mp3, &wav) {
+            (Some(pcm), _, _) => (|| {
+                let mut w = BufWriter::new(File::create(&tmp)?);
+                encode_track(profile, pcm.as_mut(), job.start, job.end, bits, &job.tags, &mut w)?;
+                w.flush()?;
+                Ok(())
+            })(),
+            (None, Some(index), _) => write_mp3(&mut src, index, job, &tmp),
+            (None, None, Some(layout)) => write_wav(&mut src, layout, job, &tmp),
             _ => unreachable!(),
         };
         if let Err(e) = result {
@@ -234,7 +258,7 @@ fn crc16(data: &[u8]) -> u16 {
 }
 
 /// Minimal ID3v2.3 tag: title, album and track number.
-fn id3v2(tags: &Tags) -> Vec<u8> {
+pub(crate) fn id3v2(tags: &Tags) -> Vec<u8> {
     let mut frames = Vec::new();
     let mut text = |id: &[u8; 4], value: &str| {
         if value.is_empty() {

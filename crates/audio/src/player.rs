@@ -7,7 +7,7 @@
 
 use crate::mp3index::Mp3Index;
 use crate::ring::Ring;
-use crate::source::{open_source, PcmSource};
+use crate::source::{open_source, MemPcm, PcmSource};
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
@@ -24,6 +24,16 @@ enum Cmd {
     Toggle,
     Seek(u64),
     PlayRange(u64, u64),
+    SetAlt(Option<AltPcm>),
+    UseAlt(bool),
+    Loop(Option<(u64, u64)>),
+}
+
+/// Alternative audio for part of the recording (an encoded preview), aligned to source frames.
+#[derive(Clone)]
+pub struct AltPcm {
+    pub pcm: Arc<Vec<f32>>,
+    pub start: u64,
 }
 
 #[derive(Default)]
@@ -43,6 +53,8 @@ struct Shared {
     flush: AtomicBool,
     /// Pause when the playhead reaches this source frame (`u64::MAX` = never).
     stop_at: AtomicU64,
+    /// Playing the alternative (encoded) audio instead of the file.
+    using_alt: AtomicBool,
     error: Mutex<Option<String>>,
 }
 
@@ -86,6 +98,22 @@ impl Player {
     pub fn play_range(&self, from: u64, to: u64) {
         let _ = self.tx.send(Cmd::PlayRange(from, to));
     }
+    /// Provide (or remove) alternative audio for A/B comparison.
+    pub fn set_alt(&self, alt: Option<AltPcm>) {
+        let _ = self.tx.send(Cmd::SetAlt(alt));
+    }
+    /// Switch between the file and the alternative audio at the current position.
+    pub fn use_alt(&self, on: bool) {
+        let _ = self.tx.send(Cmd::UseAlt(on));
+    }
+    /// Loop playback over `[from, to)`.
+    pub fn set_loop(&self, range: Option<(u64, u64)>) {
+        let _ = self.tx.send(Cmd::Loop(range));
+    }
+
+    pub fn is_using_alt(&self) -> bool {
+        self.shared.using_alt.load(Relaxed)
+    }
 
     pub fn is_loaded(&self) -> bool {
         self.shared.loaded.load(Relaxed)
@@ -110,6 +138,10 @@ impl Player {
 
 struct Loaded {
     source: Box<dyn PcmSource>,
+    /// The file's source while the alternative audio is playing.
+    stashed: Option<Box<dyn PcmSource>>,
+    alt: Option<AltPcm>,
+    loop_range: Option<(u64, u64)>,
     _stream: cpal::Stream,
     ring: Arc<Ring>,
     dev_channels: usize,
@@ -142,7 +174,49 @@ impl Engine {
                 self.handle(cmd);
             }
             self.fill();
+            self.check_loop();
         }
+    }
+
+    fn position(&self) -> u64 {
+        let s = &self.shared;
+        let ratio = f64::from_bits(s.ratio.load(Relaxed));
+        s.base.load(Relaxed) + (s.consumed.load(Relaxed) as f64 * ratio) as u64
+    }
+
+    fn check_loop(&mut self) {
+        let Some((a, b)) = self.cur.as_ref().and_then(|c| c.loop_range) else { return };
+        // Stopped because everything was played (not paused with audio still buffered).
+        let ended = self.shared.stop_at.load(Relaxed) == u64::MAX
+            && !self.shared.playing.load(Relaxed)
+            && self.cur.as_ref().is_some_and(|c| c.eos && c.ring.len() == 0 && c.pending_at >= c.pending.len());
+        if ended {
+            // The in-memory preview ran out at the window's end: wrap around and keep playing.
+            self.seek(a);
+            self.shared.playing.store(true, Relaxed);
+        } else if self.shared.playing.load(Relaxed) && self.position() >= b {
+            self.seek(a);
+        }
+    }
+
+    /// Swap between the file and the alternative audio, continuing from the same position.
+    fn use_alt(&mut self, on: bool) {
+        let pos = self.position();
+        let s = self.shared.clone();
+        let Some(cur) = &mut self.cur else { return };
+        match (on, cur.stashed.is_some()) {
+            (true, false) => {
+                let Some(alt) = cur.alt.clone() else { return };
+                let mem = MemPcm::new(alt.pcm, cur.source.channels(), cur.source.sample_rate(), alt.start);
+                cur.stashed = Some(std::mem::replace(&mut cur.source, Box::new(mem)));
+            }
+            (false, true) => {
+                cur.source = cur.stashed.take().unwrap();
+            }
+            _ => return,
+        }
+        s.using_alt.store(on, Relaxed);
+        self.seek(pos);
     }
 
     fn report(&self, e: anyhow::Error) {
@@ -186,6 +260,20 @@ impl Engine {
                 s.stop_at.store(to, Relaxed);
                 self.play();
             }
+            Cmd::SetAlt(alt) => {
+                if alt.is_none() {
+                    self.use_alt(false);
+                }
+                if let Some(cur) = &mut self.cur {
+                    cur.alt = alt;
+                }
+            }
+            Cmd::UseAlt(on) => self.use_alt(on),
+            Cmd::Loop(range) => {
+                if let Some(cur) = &mut self.cur {
+                    cur.loop_range = range;
+                }
+            }
         }
     }
 
@@ -194,6 +282,7 @@ impl Engine {
         s.playing.store(false, Relaxed);
         s.loaded.store(false, Relaxed);
         self.cur = None; // drops the stream
+        s.using_alt.store(false, Relaxed);
         s.base.store(0, Relaxed);
         s.consumed.store(0, Relaxed);
         s.total.store(0, Relaxed);
@@ -341,6 +430,9 @@ impl Engine {
 
         Ok(Loaded {
             source,
+            stashed: None,
+            alt: None,
+            loop_range: None,
             _stream: stream,
             ring,
             dev_channels,

@@ -60,6 +60,8 @@ pub struct App {
     pub paste: Signal<Option<String>>,
     pub export: Signal<ExportState>,
     pub export_rx: Signal<Option<crossbeam_channel::Receiver<ExportMsg>>>,
+    pub ab: Signal<crate::ab::AbState>,
+    pub ab_rx: Signal<Option<crossbeam_channel::Receiver<crate::ab::AbResult>>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -99,6 +101,8 @@ impl App {
             paste: Signal::new(None),
             export: Signal::new(ExportState::Idle),
             export_rx: Signal::new(None),
+            ab: Signal::new(Default::default()),
+            ab_rx: Signal::new(None),
         }
     }
 
@@ -170,6 +174,7 @@ impl App {
             return;
         }
         self.selected.set(Some(i));
+        self.ab_stop();
         self.cur_split.set(None);
         self.drag.set(None);
         self.editing_title.set(None);
@@ -318,6 +323,7 @@ impl App {
             self.follow(pos);
         }
         self.poll_export();
+        self.poll_ab();
         if self.cut_dirty.peek().is_some_and(|t| t.elapsed() > Duration::from_millis(400)) {
             self.save_now();
         }

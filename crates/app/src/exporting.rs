@@ -3,7 +3,8 @@
 use crate::state::{key_of, App, ExportMsg, ExportState};
 use dioxus::prelude::*;
 use splitter_audio::export::{export, ExportJob, Tags};
-use splitter_core::export::plan;
+use splitter_core::export::{plan, Profile, SourceFacts};
+use splitter_audio::{Bitrate, SourceInfo};
 use splitter_core::Status;
 use std::path::PathBuf;
 
@@ -25,8 +26,10 @@ impl App {
         };
         let key = key_of(&path);
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "mp3".into());
+        let src_ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "mp3".into());
         let settings = self.cutlist.peek().export.clone();
+        let profile = settings.profile;
+        let ext = profile.extension(&src_ext).to_string();
         let Some(planned) = self.peek_edit(|e| plan(e, scan.info.total_samples, &stem, &settings)) else { return };
         if planned.is_empty() {
             self.error.set(Some("Every track is dropped; there is nothing to export.".into()));
@@ -47,7 +50,7 @@ impl App {
             .name("splitter-export".into())
             .spawn(move || {
                 let progress_tx = tx.clone();
-                let result = export(&path, &scan, &jobs, &mut |n| {
+                let result = export(&path, &scan, &jobs, profile, &mut |n| {
                     let _ = progress_tx.send(ExportMsg::Progress(n));
                 });
                 let _ = tx.send(match result {
@@ -96,8 +99,29 @@ impl App {
         Some(folder.join(stem))
     }
 
+    pub fn set_profile(mut self, profile: Profile) {
+        if self.cutlist.peek().export.profile == profile {
+            return;
+        }
+        self.ab_stop();
+        self.cutlist.write().export.profile = profile;
+        self.mark_dirty();
+        self.save_now();
+    }
+
     /// Open the export folder in Finder.
     pub fn reveal_export(&self, dir: &std::path::Path) {
         let _ = std::process::Command::new("open").arg(dir).spawn();
     }
+}
+
+/// What the size estimate and warnings need from a scan.
+pub fn source_facts(info: &SourceInfo, lossy: bool) -> SourceFacts {
+    let (kbps, bits) = match info.bitrate {
+        Bitrate::Cbr(k) => (k, None),
+        Bitrate::Vbr { avg, .. } => (avg, None),
+        Bitrate::Pcm { bits, kbps } => (kbps, Some(bits)),
+        Bitrate::Unknown => ((info.file_size as f64 * 8.0 / 1000.0 / info.duration_secs().max(1.0)) as u32, None),
+    };
+    SourceFacts { lossy, kbps, sample_rate: info.sample_rate, channels: info.channels, bits }
 }

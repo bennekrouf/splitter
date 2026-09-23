@@ -27,7 +27,7 @@ cargo run -p splitter-audio --release --example make_test_recording -- testdata 
 Export a folder from its cutlist without the UI, checking every track's length:
 
 ```bash
-cargo run -p splitter --release --example export_cutlist -- testdata --out /tmp/out --verify
+cargo run -p splitter --release --example export_cutlist -- testdata --out /tmp/out --verify --profile mp3-v2
 ```
 
 Scan and seek timings on any file:
@@ -60,6 +60,8 @@ cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min
 |---|---|
 | T | type the current track's title (Enter saves and moves to the next, Esc cancels) |
 | X | leave the current track out of the export, or bring it back |
+| A | A/B: loop 12 s from the playhead, then switch between original and the export format |
+| Esc | stop A/B |
 | ⌘E | export the kept tracks |
 
 The *current track* is the one after the selected split, or the one under the playhead.
@@ -104,6 +106,24 @@ names are replaced; files from an earlier export with different names are left a
   play up to ~0.1 s extra at each end. A track starting at 0 loses the first 529 samples (12 ms of
   encoder lead-in). Files get ID3v2 title, album (the recording's name) and track number.
 - **WAV** tracks are a straight byte copy of the sample data with the original format chunk.
+
+### Formats
+
+The export bar picks the format (saved in the cutlist) and shows an estimated total size
+(Original is exact; the others are typical averages) plus warnings, e.g. re-encoding an MP3, a
+bitrate above the source's, or FLAC/WAV from an MP3 (bigger files, same quality).
+
+| Format | How |
+|---|---|
+| Original | lossless copy, as above |
+| MP3 VBR V0 / V2 / V4, CBR 320–128 | LAME (`-q 2`), with LAME's own gapless header; ID3v2 tags |
+| FLAC | flacenc, 16-bit (24-bit for >16-bit sources); Vorbis comment tags |
+| WAV 16-bit | PCM, no tags |
+
+Re-encoded tracks are cut from the decoded audio, so they start and end exactly on the split.
+**A/B** encodes the 12 s window with the chosen format in the background, decodes it back and
+loops it; **A** swaps between original and encoded at the same position. LAME is LGPL and is
+compiled in statically; keep that in mind if you ever distribute the app.
 
 Tests decode every exported track and compare it sample by sample with the source, for CBR,
 VBR and 32 kbps MP3 (where the reservoir spans many frames) and WAV.

@@ -8,6 +8,7 @@ use mp3lame_encoder::Bitrate;
 use splitter_audio::export::{export, ExportJob, Tags};
 use splitter_audio::scan::scan;
 use splitter_audio::source::open_source;
+use splitter_core::export::Profile;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -38,7 +39,7 @@ fn check_export(source: &Path, name: &str) {
         })
         .collect();
     let mut done = 0;
-    export(source, &s, &jobs, &mut |n| done = n).unwrap();
+    export(source, &s, &jobs, Profile::Original, &mut |n| done = n).unwrap();
     assert_eq!(done, jobs.len());
 
     for job in &jobs {

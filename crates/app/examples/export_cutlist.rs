@@ -2,11 +2,12 @@
 //! optionally verify each track decodes (gaplessly) to exactly its planned length.
 //!
 //!     cargo run -p splitter --release --example export_cutlist -- testdata [--out DIR] [--verify]
+//!         [--profile original|mp3-v0|mp3-v2|mp3-v4|mp3-320|mp3-256|mp3-192|mp3-128|flac|wav16]
 
 use splitter_audio::export::{export, ExportJob, Tags};
 use splitter_audio::scan::load_or_scan;
 use splitter_core::cutlist::Cutlist;
-use splitter_core::export::plan;
+use splitter_core::export::{plan, Profile};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -15,21 +16,39 @@ fn main() {
     let dir = PathBuf::from(args.next().expect("usage: export_cutlist <folder> [--out DIR] [--verify]"));
     let mut out_root = None;
     let mut verify = false;
+    let mut profile_arg: Option<Profile> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out_root = args.next().map(PathBuf::from),
             "--verify" => verify = true,
+            "--profile" => {
+                let name = args.next().expect("--profile needs a value");
+                profile_arg = Some(match name.as_str() {
+                    "original" => Profile::Original,
+                    "flac" => Profile::Flac,
+                    "wav16" => Profile::Wav16,
+                    n if n.starts_with("mp3-v") => Profile::Mp3Vbr { quality: n[5..].parse().expect("mp3-vN") },
+                    n if n.starts_with("mp3-") => Profile::Mp3Cbr { kbps: n[4..].parse().expect("mp3-KBPS") },
+                    n => panic!("unknown profile {n}"),
+                });
+            }
             other => panic!("unknown argument {other}"),
         }
     }
-    let cutlist = Cutlist::load(&dir).expect("reading cutlist");
+    let mut cutlist = Cutlist::load(&dir).expect("reading cutlist");
+    if let Some(p) = profile_arg {
+        cutlist.export.profile = p;
+    }
+    let profile = cutlist.export.profile;
+    println!("profile: {}", profile.label());
     let mut failures = 0;
 
     for (name, edit) in &cutlist.recordings {
         let path = dir.join(name);
         let scan = load_or_scan(&path, &mut |_| {}).expect("scan");
         let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-        let ext = path.extension().unwrap().to_string_lossy().to_lowercase();
+        let src_ext = path.extension().unwrap().to_string_lossy().to_lowercase();
+        let ext = profile.extension(&src_ext);
         let out = out_root.clone().unwrap_or_else(|| dir.clone()).join(&stem);
         let planned = plan(edit, scan.info.total_samples, &stem, &cutlist.export);
         let jobs: Vec<ExportJob> = planned
@@ -43,15 +62,24 @@ fn main() {
             .collect();
 
         let t0 = Instant::now();
-        export(&path, &scan, &jobs, &mut |_| {}).expect("export");
-        println!("{name}: {} tracks in {:.2} s → {}", jobs.len(), t0.elapsed().as_secs_f64(), out.display());
+        export(&path, &scan, &jobs, profile, &mut |_| {}).expect("export");
+        let bytes: u64 = jobs.iter().map(|j| std::fs::metadata(&j.path).map(|m| m.len()).unwrap_or(0)).sum();
+        println!(
+            "{name}: {} tracks in {:.2} s, {:.1} MB → {}",
+            jobs.len(),
+            t0.elapsed().as_secs_f64(),
+            bytes as f64 / 1e6,
+            out.display()
+        );
 
         if verify {
             let rate = scan.info.sample_rate as f64;
             for job in &jobs {
                 let got = gapless_frames(&job.path);
-                // A track starting at 0 can't include the decoder's first 529 samples.
-                let want = job.end - job.start.max(if scan.mp3.is_some() { 529 } else { 0 });
+                // A copied MP3 track starting at 0 can't include the decoder's first 529 samples;
+                // re-encoded tracks start exactly.
+                let lead = if scan.mp3.is_some() && profile == Profile::Original { 529 } else { 0 };
+                let want = job.end - job.start.max(lead);
                 let ok = got == want;
                 failures += !ok as usize;
                 println!(
