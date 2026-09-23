@@ -1,0 +1,15 @@
+[package]
+name = "splitter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+splitter-core.workspace = true
+splitter-audio.workspace = true
+dioxus.workspace = true
+tokio.workspace = true
+rfd.workspace = true
+crossbeam-channel.workspace = true
+
+[dev-dependencies]
+symphonia.workspace = true
