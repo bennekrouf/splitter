@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav"];
+/// Video files whose audio is split (AAC in MP4/QuickTime); tracks are exported as audio.
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
@@ -39,11 +41,21 @@ impl Recording {
     }
 }
 
+fn has_extension(path: &Path, list: &[&str]) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| list.contains(&e.to_ascii_lowercase().as_str()))
+}
+
 pub fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
+    has_extension(path, AUDIO_EXTENSIONS)
+}
+
+pub fn is_video(path: &Path) -> bool {
+    has_extension(path, VIDEO_EXTENSIONS)
+}
+
+/// A file the app can open: audio, or a video whose audio it splits.
+pub fn is_recording(path: &Path) -> bool {
+    is_audio(path) || is_video(path)
 }
 
 /// `path` with its file name changed to `stem` (made safe for a file name), keeping the
@@ -58,12 +70,12 @@ pub fn renamed(path: &Path, stem: &str) -> Option<PathBuf> {
     (to != path).then_some(to)
 }
 
-/// All supported audio files directly inside `dir`, sorted by file name.
+/// All supported audio and video files directly inside `dir`, sorted by file name.
 pub fn list_recordings(dir: &Path) -> std::io::Result<Vec<Recording>> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_file() && is_audio(p))
+        .filter(|p| p.is_file() && is_recording(p))
         .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("._")))
         .collect();
     paths.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
@@ -88,5 +100,14 @@ mod tests {
         assert!(is_audio(Path::new("b.wav")));
         assert!(!is_audio(Path::new("c.flac")));
         assert!(!is_audio(Path::new("noext")));
+    }
+
+    #[test]
+    fn videos_are_recordings() {
+        assert!(is_recording(Path::new("Concert.MP4")));
+        assert!(is_recording(Path::new("clip.mov")));
+        assert!(is_video(Path::new("clip.m4v")));
+        assert!(!is_audio(Path::new("clip.mp4")));
+        assert!(!is_recording(Path::new("clip.mkv")));
     }
 }

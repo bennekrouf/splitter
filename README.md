@@ -1,6 +1,8 @@
 # Splitter
 
 Keyboard-driven tool for splitting long MP3/WAV recordings into tracks. Rust + Dioxus desktop.
+Videos (MP4, M4V, MOV with AAC audio) open too: they're split by their audio and exported as
+audio tracks.
 
 ## Layout
 
@@ -22,6 +24,15 @@ In the file list, **🗑** (on hover) moves a recording to the system Trash afte
 (Enter confirms, Esc cancels); its splits and titles are dropped, exported tracks are left
 alone. Drag the list's right edge to make it wider, or double-click the edge to fit the longest
 file name; the width is remembered.
+
+### Videos
+
+MP4, M4V and MOV files are listed next to the recordings. Their audio track is scanned, played
+and split like any recording; the picture is ignored and tracks are exported as audio. The audio
+can't be copied out of a video as is, so **Original** exports FLAC for a video (the export bar
+says so), and the MP3 formats give smaller files. **Apply cuts** writes a WAV, as for an MP3.
+Only AAC-LC audio is supported (symphonia's decoder): HE-AAC and multichannel AAC, and MKV/WebM
+files, don't open yet.
 
 ### From a YouTube link
 

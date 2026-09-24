@@ -399,7 +399,7 @@ fn Sidebar() -> Element {
                 }
             }
             if recordings.is_empty() {
-                div { class: "hint", "Open a folder containing MP3 or WAV recordings (⌘O), or a YouTube link (⌘U)." }
+                div { class: "hint", "Open a folder containing MP3 or WAV recordings, or MP4/MOV videos (⌘O), or a YouTube link (⌘U)." }
             }
             div { class: "sidebar-foot",
                 if active > 0 {
@@ -728,6 +728,7 @@ fn Info(scan: ScanRef) -> Element {
         Bitrate::Cbr(k) => format!("CBR {k} kbps"),
         Bitrate::Vbr { min, avg, max } => format!("VBR {min}–{max} kbps (avg {avg})"),
         Bitrate::Pcm { kbps, .. } => format!("{kbps} kbps"),
+        Bitrate::Avg(k) => format!("~{k} kbps"),
         Bitrate::Unknown => "bitrate unknown".into(),
     };
     let channels = match i.channels {
@@ -1219,9 +1220,11 @@ fn ExportBar(scan: ScanRef) -> Element {
     let map = app.loudness.read().get(&path).cloned();
     let set: Option<Loudness> = map.map(|m| m.ranges(&planned.iter().map(|t| (t.start, t.end)).collect::<Vec<_>>()));
     let info = &scan.0.info;
-    let facts = source_facts(info, scan.0.mp3.is_some());
+    let facts = source_facts(&path, &scan.0);
+    // What Original really writes for this file (FLAC for the audio of a video).
+    let effective = profile.effective(&facts);
     let secs: f64 = planned.iter().map(|t| (t.end - t.start) as f64).sum::<f64>() / info.sample_rate as f64;
-    let bytes = if profile == Profile::Original {
+    let bytes = if effective == Profile::Original {
         // Exact for the source's own format: its share of the file.
         (info.file_size as f64 * secs / info.duration_secs().max(1e-9)) as u64
     } else {
@@ -1229,7 +1232,7 @@ fn ExportBar(scan: ScanRef) -> Element {
     };
     let size = fmt_bytes(bytes);
     let warnings = profile.warnings(&facts);
-    let ext = profile.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
+    let ext = effective.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
     let selected_idx = Profile::CHOICES.iter().position(|p| *p == profile).unwrap_or(0);
 
     rsx! {
@@ -1264,12 +1267,12 @@ fn ExportBar(scan: ScanRef) -> Element {
             }
             select {
                 class: "profile",
-                title: if profile == Profile::Original {
+                title: if effective == Profile::Original {
                     "A byte copy can't change level; tracks get ReplayGain tags instead"
                 } else {
                     "Loudness adjustment (never pushes true peak above -1 dBTP)"
                 },
-                disabled: profile == Profile::Original,
+                disabled: effective == Profile::Original,
                 value: "{norm_idx}",
                 onchange: move |e| {
                     if let Some(n) = e.value().parse::<usize>().ok().and_then(|i| Normalize::CHOICES.get(i)) {

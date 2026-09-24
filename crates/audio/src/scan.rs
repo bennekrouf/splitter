@@ -16,9 +16,19 @@ use std::time::UNIX_EPOCH;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Bitrate {
     Cbr(u32),
-    Vbr { min: u32, avg: u32, max: u32 },
-    Pcm { bits: u32, kbps: u32 },
+    Vbr {
+        min: u32,
+        avg: u32,
+        max: u32,
+    },
+    Pcm {
+        bits: u32,
+        kbps: u32,
+    },
     Unknown,
+    /// Average of a compressed stream other than MP3 (e.g. AAC in a video), measured from its
+    /// packets, so a video's picture doesn't count.
+    Avg(u32),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,10 +63,10 @@ pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
     progress(0.02);
 
     let mut dec = Decoding::probe(path)?;
-    let track = dec.format().default_track().ok_or_else(|| anyhow!("no audio track"))?;
-    let params = track.codec_params.clone();
+    // Not `default_track()`: in a video file that is usually the picture.
+    let params = dec.params().clone();
     let sample_rate = params.sample_rate.ok_or_else(|| anyhow!("unknown sample rate"))?;
-    let channels = params.channels.map(|c| c.count()).unwrap_or(1);
+    let channels = dec.channels();
     let expected = mp3.as_ref().map(|m| m.total_samples()).or(params.n_frames).unwrap_or(0);
 
     let mut analysis = AnalysisBuilder::new(channels, sample_rate);
@@ -97,7 +107,15 @@ pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
             Some(bits) => {
                 (format!("PCM {bits}-bit"), Bitrate::Pcm { bits, kbps: sample_rate * channels as u32 * bits / 1000 })
             }
-            None => ("PCM".to_string(), Bitrate::Unknown),
+            None => {
+                let name = symphonia::default::get_codecs()
+                    .get_codec(params.codec)
+                    .map(|d| d.short_name.to_uppercase())
+                    .unwrap_or_else(|| "Unknown codec".into());
+                let secs = total as f64 / sample_rate as f64;
+                let kbps = if secs > 0.0 { (dec.packet_bytes as f64 * 8.0 / 1000.0 / secs).round() as u32 } else { 0 };
+                (name, if kbps > 0 { Bitrate::Avg(kbps) } else { Bitrate::Unknown })
+            }
         },
     };
 

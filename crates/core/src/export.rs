@@ -76,8 +76,10 @@ pub enum Profile {
 /// What the size estimate and warnings need to know about the source.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SourceFacts {
-    /// MP3 (or another lossy codec).
+    /// MP3 (or another lossy codec, e.g. AAC in a video).
     pub lossy: bool,
+    /// Original can copy the audio as is (MP3, WAV); not audio inside a video file.
+    pub copyable: bool,
     /// Average bitrate of the file's audio.
     pub kbps: u32,
     pub sample_rate: u32,
@@ -130,6 +132,15 @@ impl Profile {
         }
     }
 
+    /// The profile actually used for `src`: Original falls back to FLAC when the audio can't be
+    /// copied as is, which keeps the decoded audio exactly.
+    pub fn effective(self, src: &SourceFacts) -> Profile {
+        match self {
+            Profile::Original if !src.copyable => Profile::Flac,
+            p => p,
+        }
+    }
+
     /// Whether the output can differ audibly from the source.
     pub fn is_lossy(&self) -> bool {
         matches!(self, Profile::Mp3Vbr { .. } | Profile::Mp3Cbr { .. })
@@ -137,6 +148,9 @@ impl Profile {
 
     /// Estimated output size for `secs` of audio.
     pub fn estimate_bytes(&self, src: &SourceFacts, secs: f64) -> u64 {
+        if *self != self.effective(src) {
+            return self.effective(src).estimate_bytes(src, secs);
+        }
         let pcm16 = src.sample_rate as f64 * src.channels as f64 * 2.0 * secs;
         let bytes = match self {
             Profile::Original => src.kbps as f64 * 125.0 * secs,
@@ -151,6 +165,12 @@ impl Profile {
 
     /// Things worth knowing before exporting `src` with this profile.
     pub fn warnings(&self, src: &SourceFacts) -> Vec<String> {
+        if *self != self.effective(src) {
+            return vec![format!(
+                "The audio of a video can't be copied as is: Original exports {} here (an MP3 format gives smaller files).",
+                self.effective(src).short()
+            )];
+        }
         let mut w = Vec::new();
         let target_kbps = match self {
             Profile::Mp3Vbr { quality } => Some(vbr_kbps(*quality)),
@@ -159,12 +179,16 @@ impl Profile {
         };
         match (src.lossy, self) {
             (true, Profile::Flac | Profile::Wav16) => w.push(format!(
-                "The source is MP3 (~{} kbps): {} keeps exactly that quality in a much larger file.",
+                "The source is lossy (~{} kbps): {} keeps exactly that quality in a much larger file.",
                 src.kbps,
                 self.short()
             )),
             (true, p) if p.is_lossy() => {
-                w.push("Re-encoding MP3 loses a little quality; Original keeps the source exactly.".into());
+                w.push(if src.copyable {
+                    "Re-encoding MP3 loses a little quality; Original keeps the source exactly.".into()
+                } else {
+                    "Re-encoding a lossy source loses a little quality.".into()
+                });
                 if let Some(t) = target_kbps.filter(|&t| t as f64 > src.kbps as f64 * 1.15) {
                     w.push(format!(
                         "The source is only ~{} kbps: {t} kbps makes files bigger without sounding better.",
@@ -298,8 +322,9 @@ mod tests {
 
     #[test]
     fn profile_warnings_and_sizes() {
-        let mp3 = SourceFacts { lossy: true, kbps: 128, sample_rate: 44100, channels: 2, bits: None };
-        let wav = SourceFacts { lossy: false, kbps: 1411, sample_rate: 44100, channels: 2, bits: Some(16) };
+        let mp3 = SourceFacts { lossy: true, copyable: true, kbps: 128, sample_rate: 44100, channels: 2, bits: None };
+        let wav =
+            SourceFacts { lossy: false, copyable: true, kbps: 1411, sample_rate: 44100, channels: 2, bits: Some(16) };
         assert!(Profile::Original.warnings(&mp3).is_empty());
         assert_eq!(Profile::Mp3Cbr { kbps: 320 }.warnings(&mp3).len(), 2, "re-encode + upsized bitrate");
         assert_eq!(Profile::Mp3Cbr { kbps: 128 }.warnings(&mp3).len(), 1);
@@ -310,6 +335,18 @@ mod tests {
         assert_eq!(Profile::Wav16.estimate_bytes(&wav, 60.0), 10_584_000);
         assert_eq!(Profile::Flac.extension("wav"), "flac");
         assert_eq!(Profile::Original.extension("wav"), "wav");
+    }
+
+    #[test]
+    fn original_falls_back_to_flac_for_video() {
+        let video =
+            SourceFacts { lossy: true, copyable: false, kbps: 128, sample_rate: 48000, channels: 2, bits: None };
+        assert_eq!(Profile::Original.effective(&video), Profile::Flac);
+        assert_eq!(Profile::Mp3Vbr { quality: 2 }.effective(&video), Profile::Mp3Vbr { quality: 2 });
+        assert_eq!(Profile::Original.estimate_bytes(&video, 60.0), Profile::Flac.estimate_bytes(&video, 60.0));
+        assert_eq!(Profile::Original.warnings(&video).len(), 1);
+        let reencode = Profile::Mp3Cbr { kbps: 128 }.warnings(&video);
+        assert!(!reencode[0].contains("Original"), "{reencode:?}");
     }
 
     #[test]

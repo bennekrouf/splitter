@@ -80,3 +80,18 @@ fn wav_seek_is_exact() {
     write_wav(&path);
     check_seeks(&path, RATE as u64 * SECS as u64);
 }
+
+/// Audio inside a video (H.264 + AAC in MP4, see `fixtures/`): the video track is skipped,
+/// and seeks, including into the last packets, match a straight decode.
+#[test]
+fn mp4_video_audio_seek_is_exact() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video.mp4");
+    check_seeks(&path, (SECS as u64) * RATE as u64);
+    let s = scan(&path, &mut |_| {}).unwrap();
+    assert_eq!(s.info.codec, "AAC");
+    assert!(
+        matches!(s.info.bitrate, splitter_audio::Bitrate::Avg(k) if (48..=96).contains(&k)),
+        "the picture must not count: {:?}",
+        s.info.bitrate
+    );
+}
