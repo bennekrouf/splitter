@@ -1,9 +1,13 @@
-//! yt-dlp and Deno (the JavaScript runtime yt-dlp needs for YouTube), installed into the app's
-//! data folder on first use, so nothing has to be installed by hand.
+//! yt-dlp and Deno (the JavaScript runtime yt-dlp needs for YouTube), and ffmpeg (video export
+//! and video downloads), installed into the app's data folder on first use, so nothing has to
+//! be installed by hand.
 //!
-//! Both come from their projects' GitHub releases and are checked against the SHA-256 sums
-//! published with them. yt-dlp's standalone builds carry their own Python. It updates itself
-//! (`yt-dlp -U`) at most once a day, since YouTube changes often and old versions stop working.
+//! yt-dlp and Deno come from their projects' GitHub releases and are checked against the
+//! SHA-256 sums published with them. yt-dlp's standalone builds carry their own Python. It
+//! updates itself (`yt-dlp -U`) at most once a day, since YouTube changes often and old
+//! versions stop working. ffmpeg is a static GPL build (with x264): yt-dlp's own builds on
+//! Windows, Martin Riedl's on macOS and Linux (FFmpeg publishes no binaries itself), each
+//! checked against its published sum too.
 
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -14,6 +18,8 @@ use std::time::{Duration, SystemTime};
 
 const YT_DLP_RELEASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 const DENO_RELEASE: &str = "https://github.com/denoland/deno/releases/latest/download";
+const FFMPEG_WINDOWS: &str = "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download";
+const FFMPEG_UNIX: &str = "https://ffmpeg.martin-riedl.de";
 const UPDATE_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 pub struct Tools {
@@ -79,6 +85,74 @@ pub fn ensure(dir: &Path, progress: &mut dyn FnMut(f32), cancelled: &dyn Fn() ->
         stamp_checked(dir);
     }
     Ok(tools)
+}
+
+/// Install ffmpeg into `dir` if it isn't there yet, and return its path.
+pub fn ensure_ffmpeg(
+    dir: &Path,
+    progress: &mut dyn FnMut(f32),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PathBuf, String> {
+    let exe = std::env::consts::EXE_SUFFIX;
+    let ffmpeg = dir.join(format!("ffmpeg{exe}"));
+    if ffmpeg.is_file() {
+        return Ok(ffmpeg);
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let unsupported = || "Video export isn't supported on this platform".to_string();
+    let (url, sum) = match std::env::consts::OS {
+        "windows" => {
+            let arch = match std::env::consts::ARCH {
+                "aarch64" => "winarm64",
+                _ => "win64",
+            };
+            let asset = format!("ffmpeg-master-latest-{arch}-gpl.zip");
+            let sums = get_text(&format!("{FFMPEG_WINDOWS}/checksums.sha256"))?;
+            let sum = sums
+                .lines()
+                .find_map(|l| l.split_once("  ").filter(|(_, name)| name.trim() == asset).map(|(h, _)| h.to_owned()))
+                .ok_or_else(|| format!("No checksum published for {asset}"))?;
+            (format!("{FFMPEG_WINDOWS}/{asset}"), sum)
+        }
+        os @ ("macos" | "linux") => {
+            let arch = match std::env::consts::ARCH {
+                "x86_64" => "amd64",
+                "aarch64" => "arm64",
+                _ => return Err(unsupported()),
+            };
+            // "latest" redirects to the versioned build, whose sum sits next to it.
+            let url = redirect_target(&format!("{FFMPEG_UNIX}/redirect/latest/{os}/{arch}/release/ffmpeg.zip"))?;
+            let sum = get_text(&format!("{url}.sha256"))?;
+            (url, find_sha256(&sum).ok_or("No checksum published for ffmpeg")?)
+        }
+        _ => return Err(unsupported()),
+    };
+    let zip = fetch_verified(&url, &sum, dir, progress, cancelled)?;
+    let tmp = dir.join("ffmpeg.unzipped");
+    let unzipped = unzip_one(&zip, &format!("ffmpeg{exe}"), &tmp);
+    let _ = std::fs::remove_file(&zip);
+    unzipped?;
+    install(&tmp, &ffmpeg)?;
+    Ok(ffmpeg)
+}
+
+/// Where `url` redirects to (absolute).
+fn redirect_target(url: &str) -> Result<String, String> {
+    let agent: ureq::Agent =
+        ureq::Agent::config_builder().max_redirects(0).max_redirects_will_error(false).build().into();
+    let resp = agent.get(url).call().map_err(|e| format!("Could not reach {url}: {e}"))?;
+    let location = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| format!("{url} didn't redirect to a download"))?;
+    Ok(match location.strip_prefix('/') {
+        Some(path) => {
+            let origin = url.splitn(4, '/').take(3).collect::<Vec<_>>().join("/");
+            format!("{origin}/{path}")
+        }
+        None => location.to_owned(),
+    })
 }
 
 fn yt_dlp_asset() -> Option<&'static str> {
@@ -165,10 +239,16 @@ fn fetch_verified(
     }
 }
 
+/// Extract the file named `entry` (at the top, or in any folder) from `zip` to `dst`.
 fn unzip_one(zip: &Path, entry: &str, dst: &Path) -> Result<(), String> {
     let err = |e: &dyn std::fmt::Display| format!("Could not unpack {}: {e}", zip.display());
     let mut archive = zip::ZipArchive::new(File::open(zip).map_err(|e| err(&e))?).map_err(|e| err(&e))?;
-    let mut file = archive.by_name(entry).map_err(|e| err(&e))?;
+    let name = archive
+        .file_names()
+        .find(|n| *n == entry || n.ends_with(&format!("/{entry}")))
+        .map(str::to_owned)
+        .ok_or_else(|| err(&format!("no {entry} inside")))?;
+    let mut file = archive.by_name(&name).map_err(|e| err(&e))?;
     let mut out = File::create(dst).map_err(|e| err(&e))?;
     std::io::copy(&mut file, &mut out).map_err(|e| err(&e))?;
     Ok(())
@@ -206,6 +286,16 @@ mod tests {
             format!("\r\nAlgorithm : SHA256\r\nHash      : {}\r\nPath      : C:\\a\\deno.zip\r\n", h.to_uppercase());
         assert_eq!(find_sha256(&ps), Some(h));
         assert_eq!(find_sha256("nothing here"), None);
+    }
+
+    /// Needs the network; installs ffmpeg into the app's real tools folder on first run.
+    /// `cargo test -p splitter -- --ignored ffmpeg`
+    #[test]
+    #[ignore]
+    fn installs_ffmpeg_with_x264() {
+        let ffmpeg = ensure_ffmpeg(&dir(), &mut |_| {}, &|| false).unwrap();
+        let out = command(&ffmpeg).args(["-hide_banner", "-encoders"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("libx264"));
     }
 
     #[test]

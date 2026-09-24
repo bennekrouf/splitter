@@ -12,11 +12,56 @@ pub struct ExportSettings {
     pub profile: Profile,
     #[serde(default)]
     pub normalize: Normalize,
+    /// Format of a video's clips (`profile` is for audio recordings).
+    #[serde(default)]
+    pub video: VideoProfile,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { naming: "{nn} - {title}".into(), profile: Profile::Original, normalize: Normalize::Off }
+        Self {
+            naming: "{nn} - {title}".into(),
+            profile: Profile::Original,
+            normalize: Normalize::Off,
+            video: VideoProfile::default(),
+        }
+    }
+}
+
+/// Output of a video's export: MP4 clips cut exactly on the splits, so re-encoded (H.264 and
+/// AAC; a copy could only cut on keyframes, often seconds away).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VideoProfile {
+    /// H.264 at constant quality `crf` (lower is better; 18 looks the same as the source).
+    Mp4 { crf: u8 },
+}
+
+impl Default for VideoProfile {
+    fn default() -> Self {
+        VideoProfile::Mp4 { crf: 18 }
+    }
+}
+
+impl VideoProfile {
+    pub const CHOICES: [VideoProfile; 3] =
+        [VideoProfile::Mp4 { crf: 18 }, VideoProfile::Mp4 { crf: 23 }, VideoProfile::Mp4 { crf: 28 }];
+
+    pub fn label(&self) -> String {
+        match self {
+            VideoProfile::Mp4 { crf: ..=18 } => "MP4 · high quality".into(),
+            VideoProfile::Mp4 { crf: 19..=23 } => "MP4 · standard".into(),
+            VideoProfile::Mp4 { .. } => "MP4 · small files".into(),
+        }
+    }
+
+    pub fn extension(&self) -> &'static str {
+        "mp4"
+    }
+
+    /// Audio bitrate of the clips.
+    pub fn audio_kbps(&self) -> u32 {
+        192
     }
 }
 
@@ -347,6 +392,16 @@ mod tests {
         assert_eq!(Profile::Original.warnings(&video).len(), 1);
         let reencode = Profile::Mp3Cbr { kbps: 128 }.warnings(&video);
         assert!(!reencode[0].contains("Original"), "{reencode:?}");
+    }
+
+    #[test]
+    fn video_profile_defaults_for_old_cutlists() {
+        // Cutlists written before video export have no `video` field.
+        let s: ExportSettings = serde_json::from_str(r#"{"naming":"{nn}","profile":{"kind":"flac"}}"#).unwrap();
+        assert_eq!(s.video, VideoProfile::Mp4 { crf: 18 });
+        let json = serde_json::to_string(&VideoProfile::Mp4 { crf: 23 }).unwrap();
+        assert_eq!(json, r#"{"kind":"mp4","crf":23}"#);
+        assert_eq!(VideoProfile::CHOICES.map(|p| p.label()).len(), 3);
     }
 
     #[test]

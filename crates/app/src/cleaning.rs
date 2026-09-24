@@ -1,14 +1,18 @@
 //! Apply cuts: write a copy of the recording without its cut silence and left-out tracks, as a
 //! new entry next to the original (which is never touched). ⌘Z right after removes the copy.
+//! A recording's copy is a WAV; a video's is an MP4, re-encoded by ffmpeg.
 
 use crate::state::{key_of, App};
+use crate::tools;
+use crate::video_export::{write_ranges, Timeline};
 use crossbeam_channel::Receiver;
 use dioxus::prelude::*;
 use std::path::{Path, PathBuf};
 
 enum Event {
     Progress(f32),
-    Done,
+    /// Written. The copy's timeline starts this many frames in (a video's AAC priming).
+    Done(u64),
     Failed(String),
 }
 
@@ -21,13 +25,14 @@ pub struct Applying {
     edit: splitter_core::edit::RecordingEdit,
 }
 
-/// `name (cleaned).wav` next to the original, or `(cleaned 2)`, … if taken.
+/// `name (cleaned).wav` (`.mp4` for a video) next to the original, or `(cleaned 2)`, … if taken.
 fn cleaned_path(path: &Path) -> PathBuf {
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = if splitter_core::is_video(path) { "mp4" } else { "wav" };
     (1..)
         .map(|n| match n {
-            1 => path.with_file_name(format!("{stem} (cleaned).wav")),
-            n => path.with_file_name(format!("{stem} (cleaned {n}).wav")),
+            1 => path.with_file_name(format!("{stem} (cleaned).{ext}")),
+            n => path.with_file_name(format!("{stem} (cleaned {n}).{ext}")),
         })
         .find(|p| !p.exists())
         .unwrap()
@@ -57,19 +62,30 @@ impl App {
             return;
         }
         let to = cleaned_path(&from);
+        let video = splitter_core::is_video(&from).then(|| self.cutlist.peek().export.video);
         let (tx, events) = crossbeam_channel::unbounded();
         let (src, dst) = (from.clone(), to.clone());
         std::thread::spawn(move || {
             let mut last = 0.0;
-            let r = splitter_audio::transcode::write_ranges_to_wav(&src, &scan, &ranges, &dst, &mut |p| {
+            let mut progress = |p: f32| {
                 if p - last >= 0.01 {
                     last = p;
                     let _ = tx.send(Event::Progress(p));
                 }
-            });
+            };
+            let rate = scan.info.sample_rate;
+            let r = match video {
+                Some(profile) => tools::ensure_ffmpeg(&tools::dir(), &mut |_| {}, &|| false).and_then(|ffmpeg| {
+                    write_ranges(&ffmpeg, &src, Timeline::of(&src, rate), &ranges, &dst, profile, &mut progress)
+                        .map(|()| Timeline::of(&dst, rate).frame(0.0))
+                }),
+                None => splitter_audio::transcode::write_ranges_to_wav(&src, &scan, &ranges, &dst, &mut progress)
+                    .map(|()| 0)
+                    .map_err(|e| format!("{e:#}")),
+            };
             let _ = tx.send(match r {
-                Ok(()) => Event::Done,
-                Err(e) => Event::Failed(format!("Could not apply the cuts: {e:#}")),
+                Ok(shift) => Event::Done(shift),
+                Err(e) => Event::Failed(format!("Could not apply the cuts: {e}")),
             });
         });
         self.applying.set(Some(Applying { events, progress: 0.0, from, to, edit }));
@@ -88,8 +104,11 @@ impl App {
                         a.progress = p;
                     }
                 }
-                Ok(Event::Done) => {
-                    let Some(a) = self.applying.take() else { return };
+                Ok(Event::Done(shift)) => {
+                    let Some(mut a) = self.applying.take() else { return };
+                    for s in &mut a.edit.splits {
+                        s.at += shift;
+                    }
                     self.cutlist.write().recordings.insert(key_of(&a.to), a.edit);
                     self.mark_dirty();
                     self.save_now();

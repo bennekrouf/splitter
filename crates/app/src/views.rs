@@ -8,7 +8,7 @@ use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
 use splitter_audio::{Bitrate, Scan};
 use splitter_core::edit::SplitState;
-use splitter_core::export::{plan, Normalize, Profile};
+use splitter_core::export::{plan, Normalize, Profile, VideoProfile};
 use splitter_core::loudness::Loudness;
 use splitter_core::time::{fmt_precise, fmt_short};
 use splitter_core::tracklist;
@@ -374,7 +374,8 @@ fn Sidebar() -> Element {
                                 match (export, scans.get(&rec.path)) {
                                     (Some(ExportStatus::Queued), _) => rsx! { span { class: "item-meta busy", "queued" } },
                                     (Some(ExportStatus::Measuring), _) => rsx! { span { class: "item-meta busy", "measuring…" } },
-                                    (Some(ExportStatus::Running { done, total }), _) => rsx! {
+                                    (Some(ExportStatus::Installing(_)), _) => rsx! { span { class: "item-meta busy", "installing ffmpeg…" } },
+                                    (Some(ExportStatus::Running { done, total, .. }), _) => rsx! {
                                         span { class: "item-meta busy", "exporting {done}/{total}" }
                                     },
                                     (Some(ExportStatus::Failed(e)), _) => rsx! { span { class: "item-meta bad", title: "{e}", "export failed" } },
@@ -445,9 +446,21 @@ fn Editor() -> Element {
     let body = match scans.get(&rec.path) {
         Some(ScanState::Ready(scan)) => {
             let scan = ScanRef(scan.clone());
+            // A file is split as a video or as audio, never both: a video shows its picture and
+            // a timeline without the waveform, and exports video clips.
+            let video = splitter_core::is_video(&rec.path).then(|| rec.path.clone());
             rsx! {
                 Info { scan: scan.clone() }
-                Overview { scan: scan.clone() }
+                // A video shows its picture where a recording shows its overview waveform.
+                if let Some(video) = video {
+                    crate::video::VideoPreview {
+                        key: "{video.display()}",
+                        path: video,
+                        rate: scan.0.info.sample_rate,
+                    }
+                } else {
+                    Overview { scan: scan.clone() }
+                }
                 Detail { scan: scan.clone() }
                 Transport { scan: scan.clone() }
                 ReviewBar { scan: scan.clone() }
@@ -663,6 +676,8 @@ fn DownloadStatus() -> Element {
 #[component]
 fn UrlDialog() -> Element {
     let app = use_context::<state::App>();
+    // Remembered while the app runs: the next link is likely the same kind.
+    let mut kind = use_signal(crate::download::Kind::default);
     let Some(text) = (app.url_dialog)() else { return rsx! {} };
     let mut dialog = app.url_dialog;
     let close = move || {
@@ -676,7 +691,7 @@ fn UrlDialog() -> Element {
         let url = app.url_dialog.peek().clone();
         if let Some(url) = url {
             close();
-            app.start_download(&url);
+            app.start_download(&url, kind());
         }
     };
     let dir = crate::download::downloads_dir();
@@ -685,8 +700,22 @@ fn UrlDialog() -> Element {
         div { class: "modal-backdrop", onclick: move |_| close(),
             div { class: "modal", onclick: move |e| e.stop_propagation(),
                 h2 { "Open from URL" }
+                div { class: "segmented",
+                    for (k, label) in [(crate::download::Kind::Audio, "Audio"), (crate::download::Kind::Video, "Video")] {
+                        button {
+                            key: "{label}",
+                            class: if kind() == k { "on" } else { "" },
+                            onclick: move |_| kind.set(k),
+                            "{label}"
+                        }
+                    }
+                }
                 p { class: "dim",
-                    "The audio is downloaded, converted to WAV and saved in {dir.display()}. "
+                    match kind() {
+                        crate::download::Kind::Audio => "The audio is downloaded, converted to WAV and saved in ",
+                        crate::download::Kind::Video => "The video is downloaded as MP4 (H.264, up to 1080p) and saved in ",
+                    }
+                    "{dir.display()}. "
                     "Works with YouTube and most other video sites. "
                     "The first time, the downloader (yt-dlp, about 75 MB) is set up automatically."
                 }
@@ -978,6 +1007,8 @@ fn tick_step(span: f64) -> f64 {
 #[component]
 fn Detail(scan: ScanRef) -> Element {
     let app = use_context::<state::App>();
+    // A video is split on a plain timeline: its picture is on top, and no waveform is drawn.
+    let waveform = !app.selected_path().is_some_and(|p| splitter_core::is_video(&p));
     let rate = scan.0.info.sample_rate as f64;
     let v = (app.view)();
     let start = v.start;
@@ -1004,7 +1035,9 @@ fn Detail(scan: ScanRef) -> Element {
                 }
             }
             div { class: "detail-wave",
-                Wave { scan: scan.clone(), start, end }
+                if waveform {
+                    Wave { scan: scan.clone(), start, end }
+                }
                 Silences { total: scan.0.info.total_samples, start, end }
                 Parts { total: scan.0.info.total_samples, start, end, labels: true }
                 AbBand { start, end }
@@ -1231,9 +1264,18 @@ fn ExportBar(scan: ScanRef) -> Element {
         profile.estimate_bytes(&facts, secs)
     };
     let size = fmt_bytes(bytes);
-    let warnings = profile.warnings(&facts);
-    let ext = effective.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
+    // A video is exported as video clips only: its own formats, no A/B of audio formats.
+    let video = splitter_core::is_video(&path);
+    let video_profile = cutlist.export.video;
+    let video_idx = VideoProfile::CHOICES.iter().position(|p| *p == video_profile).unwrap_or(0);
+    let warnings = if video { Vec::new() } else { profile.warnings(&facts) };
+    let ext = match video {
+        true => video_profile.extension().to_string(),
+        false => effective.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string(),
+    };
     let selected_idx = Profile::CHOICES.iter().position(|p| *p == profile).unwrap_or(0);
+    // Only a byte copy can't change level.
+    let fixed_level = !video && effective == Profile::Original;
 
     rsx! {
         div { class: "export-bar",
@@ -1243,36 +1285,53 @@ fn ExportBar(scan: ScanRef) -> Element {
                 },
                 "Paste tracklist…"
             }
-            select {
-                class: "profile",
-                title: "Export format",
-                value: "{selected_idx}",
-                onchange: move |e| {
-                    if let Some(p) = e.value().parse::<usize>().ok().and_then(|i| Profile::CHOICES.get(i)) {
-                        app.set_profile(*p);
+            if video {
+                select {
+                    class: "profile",
+                    title: "Clips are cut exactly on the splits and re-encoded (H.264 and AAC)",
+                    value: "{video_idx}",
+                    onchange: move |e| {
+                        if let Some(p) = e.value().parse::<usize>().ok().and_then(|i| VideoProfile::CHOICES.get(i)) {
+                            app.set_video_profile(*p);
+                        }
+                        app.focus_root();
+                    },
+                    for (i, p) in VideoProfile::CHOICES.iter().enumerate() {
+                        option { key: "{i}", value: "{i}", selected: i == video_idx, "{p.label()}" }
                     }
-                    app.focus_root();
-                },
-                for (i, p) in Profile::CHOICES.iter().enumerate() {
-                    option { key: "{i}", value: "{i}", selected: i == selected_idx, "{p.label()}" }
+                }
+            } else {
+                select {
+                    class: "profile",
+                    title: "Export format",
+                    value: "{selected_idx}",
+                    onchange: move |e| {
+                        if let Some(p) = e.value().parse::<usize>().ok().and_then(|i| Profile::CHOICES.get(i)) {
+                            app.set_profile(*p);
+                        }
+                        app.focus_root();
+                    },
+                    for (i, p) in Profile::CHOICES.iter().enumerate() {
+                        option { key: "{i}", value: "{i}", selected: i == selected_idx, "{p.label()}" }
+                    }
+                }
+                button {
+                    class: if profile.is_lossy() { "ab-button" } else { "ab-button dim" },
+                    title: "Loop 12 s from the playhead and switch between the original and this format (A)",
+                    disabled: profile == Profile::Original,
+                    onclick: move |_| app.ab_toggle(),
+                    "A/B"
+                    kbd { "A" }
                 }
             }
-            button {
-                class: if profile.is_lossy() { "ab-button" } else { "ab-button dim" },
-                title: "Loop 12 s from the playhead and switch between the original and this format (A)",
-                disabled: profile == Profile::Original,
-                onclick: move |_| app.ab_toggle(),
-                "A/B"
-                kbd { "A" }
-            }
             select {
                 class: "profile",
-                title: if effective == Profile::Original {
+                title: if fixed_level {
                     "A byte copy can't change level; tracks get ReplayGain tags instead"
                 } else {
                     "Loudness adjustment (never pushes true peak above -1 dBTP)"
                 },
-                disabled: effective == Profile::Original,
+                disabled: fixed_level,
                 value: "{norm_idx}",
                 onchange: move |e| {
                     if let Some(n) = e.value().parse::<usize>().ok().and_then(|i| Normalize::CHOICES.get(i)) {
@@ -1285,7 +1344,7 @@ fn ExportBar(scan: ScanRef) -> Element {
                 }
             }
             span { class: "dim",
-                "{count} tracks · ≈ {size}"
+                if video { "{count} clips" } else { "{count} tracks · ≈ {size}" }
                 if dropped > 0 { " · {dropped} left out" }
                 " → {stem}/*.{ext}"
             }
@@ -1304,12 +1363,15 @@ fn ExportBar(scan: ScanRef) -> Element {
             match status {
                 Some(ExportStatus::Queued) => rsx! { span { class: "dim", "Queued…" } },
                 Some(ExportStatus::Measuring) => rsx! { span { class: "dim", "Measuring loudness…" } },
-                Some(ExportStatus::Running { done, total }) => rsx! {
-                    span { class: "dim", "Exporting {done}/{total}…" }
-                    div { class: "progress small", div { style: "width: {done as f64 / total.max(1) as f64 * 100.0}%" } }
+                Some(ExportStatus::Installing(p)) => rsx! {
+                    span { class: "dim", "Installing ffmpeg for video export… {(p * 100.0) as u32}%" }
+                },
+                Some(s @ ExportStatus::Running { done, total, .. }) => rsx! {
+                    span { class: "dim", "Exporting {done + 1}/{total}…" }
+                    div { class: "progress small", div { style: "width: {s.fraction().unwrap_or(0.0) * 100.0}%" } }
                 },
                 Some(ExportStatus::Finished { dir, count }) => rsx! {
-                    span { class: "ok", "✓ Exported {count} tracks" }
+                    span { class: "ok", if video { "✓ Exported {count} clips" } else { "✓ Exported {count} tracks" } }
                     button { onclick: move |_| app.reveal_export(&dir), "Show in Finder" }
                 },
                 Some(ExportStatus::Cancelled) => rsx! { span { class: "dim", "Export cancelled" } },

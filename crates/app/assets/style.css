@@ -157,6 +157,29 @@ button.primary { border-color: var(--accent); color: var(--accent); }
   overflow: hidden;
 }
 .overview { height: 64px; }
+/* A video's picture takes the overview's place. */
+.video-preview {
+  position: relative;
+  flex: 0 1 36vh;
+  min-height: 120px;
+  display: flex;
+  justify-content: center;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.video-preview video { height: 100%; max-width: 100%; object-fit: contain; cursor: pointer; }
+.video-failed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  text-align: center;
+  color: var(--dim);
+}
 .detail { display: flex; flex-direction: column; flex: 1; min-height: 140px; }
 .detail-wave { flex: 1; }
 
@@ -428,6 +451,10 @@ button:disabled { opacity: 0.45; }
   -webkit-user-select: text;
 }
 .modal input.url:focus { outline: none; border-color: var(--accent); }
+.segmented { display: flex; align-self: flex-start; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.segmented button { border: 0; border-radius: 0; background: transparent; color: var(--dim); padding: 4px 14px; }
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button.on { background: var(--panel-2); color: var(--text); }
 .match.ok { color: var(--ok); }
 .match.todo { color: var(--todo); }
 .preview { margin: 0; padding-left: 22px; max-height: 150px; overflow-y: auto; color: var(--text); }
