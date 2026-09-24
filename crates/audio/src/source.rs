@@ -173,6 +173,11 @@ impl GenericSource {
         let rate = params.sample_rate.ok_or_else(|| anyhow!("unknown sample rate"))?;
         Ok(Self { dec, channels, rate })
     }
+
+    /// Length in sample frames, when the container says.
+    pub fn total_frames(&self) -> Option<u64> {
+        self.dec.format().tracks().iter().find(|t| t.id == self.dec.track_id)?.codec_params.n_frames
+    }
 }
 
 impl PcmSource for GenericSource {

@@ -6,6 +6,7 @@ mod download;
 mod exporting;
 mod review;
 mod state;
+mod tools;
 mod views;
 
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};

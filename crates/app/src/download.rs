@@ -1,16 +1,19 @@
 //! Open a recording from a URL (YouTube or anything else yt-dlp supports): yt-dlp downloads
-//! the best audio and ffmpeg converts it to WAV in the downloads folder, which then opens
-//! with the new file selected.
+//! the audio stream, we convert it to WAV in the downloads folder, which then opens with the
+//! new file selected.
 //!
-//! WAV keeps the rest of the app unchanged: it decodes and seeks exactly, and exporting as
-//! "Original" doesn't add a second lossy encode on top of YouTube's.
+//! yt-dlp and Deno are installed and kept up to date by `tools`; nothing else is needed.
+//! We ask for AAC (.m4a) or MP3 so no ffmpeg is involved: MP3 is kept as is, and AAC is decoded
+//! to WAV with symphonia. WAV keeps the rest of the app unchanged: it decodes and seeks exactly,
+//! and exporting as "Original" doesn't add a second lossy encode on top of the site's.
 
 use crate::state::App;
+use crate::tools;
 use crossbeam_channel::{Receiver, Sender};
 use dioxus::prelude::*;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -24,23 +27,22 @@ pub fn downloads_dir() -> PathBuf {
 }
 
 enum Event {
-    /// Fraction downloaded, when the size is known.
-    Progress(Option<f32>),
-    /// Download finished; ffmpeg is extracting the audio.
-    Converting,
+    Phase(Phase),
     Done(PathBuf),
     Failed(String),
 }
 
-/// What the sidebar shows while a download runs.
+/// What the sidebar shows while a download runs. Fractions are `None` when unknown.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Phase {
+    /// First use: fetching yt-dlp and Deno.
+    Installing(f32),
     Starting,
     Downloading(Option<f32>),
-    Converting,
+    Converting(Option<f32>),
 }
 
-/// A running download: yt-dlp in a child process, read on a worker thread.
+/// A running download, on a worker thread.
 pub struct Download {
     events: Receiver<Event>,
     child: Arc<Mutex<Option<Child>>>,
@@ -49,44 +51,23 @@ pub struct Download {
 }
 
 impl Download {
-    fn start(url: &str, dir: &Path) -> Result<Self, String> {
-        let yt_dlp = find_tool("yt-dlp").ok_or_else(|| missing("yt-dlp"))?;
-        find_tool("ffmpeg").ok_or_else(|| missing("ffmpeg"))?;
-        std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-
-        let mut child = Command::new(yt_dlp)
-            // Apps started from the Finder don't get the shell's PATH; yt-dlp needs ffmpeg on it.
-            .env("PATH", search_path())
-            .args(["--no-playlist", "--newline", "--progress", "--no-colors"])
-            .args(["-f", "bestaudio/best", "-x", "--audio-format", "wav"])
-            .args([
-                "--progress-template",
-                &format!(
-                    "download:{PROGRESS} %(progress.status)s %(progress.downloaded_bytes)s \
-                     %(progress.total_bytes)s %(progress.total_bytes_estimate)s"
-                ),
-            ])
-            .args(["--print", &format!("after_move:{FILE} %(filepath)s")])
-            .arg("-P")
-            .arg(dir)
-            .args(["-o", "%(title).150B [%(id)s].%(ext)s"])
-            .arg("--")
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Could not start yt-dlp: {e}"))?;
-
+    fn start(url: &str, dir: &Path, tools_dir: &Path) -> Result<Self, String> {
         let (tx, events) = crossbeam_channel::unbounded();
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let child = Arc::new(Mutex::new(Some(child)));
+        let child = Arc::new(Mutex::new(None));
         let cancelled = Arc::new(AtomicBool::new(false));
         let (c, k) = (child.clone(), cancelled.clone());
+        let (url, dir, tools_dir) = (url.to_owned(), dir.to_owned(), tools_dir.to_owned());
         std::thread::Builder::new()
             .name("splitter-download".into())
-            .spawn(move || run(stdout, stderr, &c, &k, &tx))
+            .spawn(move || {
+                let result = run(&url, &dir, &tools_dir, &c, &k, &tx);
+                if !k.load(Ordering::SeqCst) {
+                    let _ = tx.send(match result {
+                        Ok(path) => Event::Done(path),
+                        Err(e) => Event::Failed(e),
+                    });
+                }
+            })
             .map_err(|e| format!("Could not start the download: {e}"))?;
         Ok(Self { events, child, cancelled, phase: Phase::Starting })
     }
@@ -100,19 +81,93 @@ impl Download {
 }
 
 fn run(
-    stdout: impl Read + Send + 'static,
-    stderr: impl Read + Send + 'static,
+    url: &str,
+    dir: &Path,
+    tools_dir: &Path,
     child: &Mutex<Option<Child>>,
     cancelled: &AtomicBool,
     tx: &Sender<Event>,
-) {
+) -> Result<PathBuf, String> {
+    let phase = |p: Phase| {
+        let _ = tx.send(Event::Phase(p));
+    };
+    let is_cancelled = || cancelled.load(Ordering::SeqCst);
+    let tools = tools::ensure(tools_dir, &mut |p| phase(Phase::Installing(p)), &is_cancelled)?;
+    phase(Phase::Starting);
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+
+    let mut spawned = tools::command(&tools.yt_dlp)
+        .arg("--ignore-config")
+        .args(["--no-playlist", "--newline", "--progress", "--no-colors"])
+        .arg("--js-runtimes")
+        .arg(format!("deno:{}", tools.deno.display()))
+        // Formats symphonia decodes; no ffmpeg to convert or fix up anything else.
+        .args(["-f", "ba[ext=m4a]/ba[ext=mp3]", "--fixup", "never"])
+        .args([
+            "--progress-template",
+            &format!(
+                "download:{PROGRESS} %(progress.status)s %(progress.downloaded_bytes)s \
+                 %(progress.total_bytes)s %(progress.total_bytes_estimate)s"
+            ),
+        ])
+        .args(["--print", &format!("after_move:{FILE} %(filepath)s")])
+        .arg("-P")
+        .arg(dir)
+        .args(["-o", "%(title).150B [%(id)s].%(ext)s"])
+        .arg("--")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start yt-dlp: {e}"))?;
+    let stdout = spawned.stdout.take().unwrap();
+    let stderr = spawned.stderr.take().unwrap();
+    *child.lock().unwrap() = Some(spawned);
+    if is_cancelled() {
+        // Cancelled while starting: `cancel` found no child to kill.
+        if let Some(c) = child.lock().unwrap().as_mut() {
+            let _ = c.kill();
+        }
+    }
+
+    let (file, errors) = read_output(stdout, stderr, tx);
+    let status = child.lock().unwrap().take().and_then(|mut c| c.wait().ok());
+    if is_cancelled() {
+        return Err("cancelled".into());
+    }
+    let file = match (file, status) {
+        (Some(path), Some(s)) if s.success() && path.is_file() => path,
+        _ if !errors.is_empty() => return Err(explain(&errors.join("\n"))),
+        (_, Some(s)) => return Err(format!("yt-dlp stopped ({s}) without producing a file")),
+        (_, None) => return Err("yt-dlp stopped without producing a file".into()),
+    };
+    if !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a")) {
+        return Ok(file); // MP3: the app plays and exports it directly
+    }
+    phase(Phase::Converting(None));
+    let wav = file.with_extension("wav");
+    splitter_audio::transcode::decode_to_wav(&file, &wav, &mut |p| phase(Phase::Converting(Some(p))))
+        .map_err(|e| format!("Could not convert the download to WAV: {e:#}"))?;
+    let _ = std::fs::remove_file(&file);
+    Ok(wav)
+}
+
+/// Forward progress; returns the downloaded file and yt-dlp's error lines.
+fn read_output(
+    stdout: impl Read + Send + 'static,
+    stderr: impl Read + Send + 'static,
+    tx: &Sender<Event>,
+) -> (Option<PathBuf>, Vec<String>) {
     // Progress can come on either stream; errors come on stderr.
     let etx = tx.clone();
     let errors = std::thread::spawn(move || {
         let mut errors = Vec::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if !parse_line(&line, &etx) && line.starts_with("ERROR:") {
-                errors.push(line.trim_start_matches("ERROR:").trim().to_owned());
+            if let Some(p) = parse_progress(&line) {
+                let _ = etx.send(Event::Phase(p));
+            } else if let Some(e) = line.strip_prefix("ERROR:") {
+                errors.push(e.trim().to_owned());
             }
         }
         errors
@@ -121,71 +176,34 @@ fn run(
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Some(path) = line.strip_prefix(FILE).map(str::trim) {
             file = Some(PathBuf::from(path));
-        } else {
-            parse_line(&line, tx);
+        } else if let Some(p) = parse_progress(&line) {
+            let _ = tx.send(Event::Phase(p));
         }
     }
-    let errors = errors.join().unwrap_or_default();
-    let status = child.lock().unwrap().take().and_then(|mut c| c.wait().ok());
-    if cancelled.load(Ordering::SeqCst) {
-        return;
-    }
-    let event = match (file, status) {
-        (Some(path), Some(s)) if s.success() && path.is_file() => Event::Done(path),
-        _ if !errors.is_empty() => Event::Failed(explain(&errors.join("\n"))),
-        (_, Some(s)) => Event::Failed(format!("yt-dlp stopped ({s}) without producing a file")),
-        (_, None) => Event::Failed("yt-dlp stopped without producing a file".into()),
-    };
-    let _ = tx.send(event);
+    (file, errors.join().unwrap_or_default())
 }
 
-/// Turn one of our progress lines into an event. Returns whether it was one.
-fn parse_line(line: &str, tx: &Sender<Event>) -> bool {
-    let Some(rest) = line.strip_prefix(PROGRESS) else { return false };
-    let fields: Vec<&str> = rest.split_whitespace().collect();
+/// One of our progress lines, as a phase.
+fn parse_progress(line: &str) -> Option<Phase> {
+    let fields: Vec<&str> = line.strip_prefix(PROGRESS)?.split_whitespace().collect();
     let num = |i: usize| fields.get(i).and_then(|s| s.parse::<f64>().ok());
-    let event = match fields.first() {
-        Some(&"finished") => Event::Converting,
-        _ => {
-            let total = num(2).or(num(3)).filter(|&t| t > 0.0);
-            Event::Progress(num(1).zip(total).map(|(d, t)| (d / t).clamp(0.0, 1.0) as f32))
-        }
-    };
-    let _ = tx.send(event);
-    true
+    if fields.first() == Some(&"finished") {
+        return Some(Phase::Converting(None));
+    }
+    let total = num(2).or(num(3)).filter(|&t| t > 0.0);
+    Some(Phase::Downloading(num(1).zip(total).map(|(d, t)| (d / t).clamp(0.0, 1.0) as f32)))
 }
 
 /// Add a hint to the errors people will actually hit.
 fn explain(err: &str) -> String {
-    let hint = if err.contains("Sign in to confirm") || err.contains("not a bot") {
-        " — YouTube wants a signed-in session; updating yt-dlp (`brew upgrade yt-dlp`) usually fixes this"
-    } else if err.contains("HTTP Error 403") || err.contains("nsig") || err.contains("Requested format") {
-        " — yt-dlp is probably out of date: `brew upgrade yt-dlp`"
+    let hint = if err.contains("Requested format is not available") {
+        " — this site offers no M4A or MP3 audio for it"
+    } else if err.contains("Sign in to confirm") || err.contains("not a bot") || err.contains("HTTP Error 403") {
+        " — YouTube is refusing this network for now; yt-dlp updates itself daily, so try again later"
     } else {
         ""
     };
     format!("Download failed: {err}{hint}")
-}
-
-fn missing(tool: &str) -> String {
-    if cfg!(target_os = "macos") {
-        format!("{tool} is not installed. Install it with: brew install yt-dlp ffmpeg")
-    } else {
-        format!("{tool} is not installed (it must be on the PATH to open URLs)")
-    }
-}
-
-/// PATH plus the usual Homebrew locations.
-fn search_path() -> std::ffi::OsString {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let extra = ["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from);
-    let dirs: Vec<PathBuf> = std::env::split_paths(&path).chain(extra).collect();
-    std::env::join_paths(dirs).unwrap_or(path)
-}
-
-fn find_tool(name: &str) -> Option<PathBuf> {
-    let exe = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-    std::env::split_paths(&search_path()).map(|d| d.join(&exe)).find(|p| p.is_file())
 }
 
 impl App {
@@ -203,7 +221,7 @@ impl App {
             self.error.set(Some("That doesn't look like a link (it should start with https://)".into()));
             return;
         }
-        match Download::start(url, &downloads_dir()) {
+        match Download::start(url, &downloads_dir(), &tools::dir()) {
             Ok(d) => self.download.set(Some(d)),
             Err(e) => self.error.set(Some(e)),
         }
@@ -225,8 +243,7 @@ impl App {
             };
             let Ok(event) = event else { return };
             let phase = match event {
-                Event::Progress(p) => Phase::Downloading(p),
-                Event::Converting => Phase::Converting,
+                Event::Phase(p) => p,
                 Event::Done(path) => {
                     self.download.set(None);
                     self.open(&path);
@@ -251,45 +268,41 @@ impl App {
 mod tests {
     use super::*;
 
-    fn parse(line: &str) -> Option<Event> {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        parse_line(line, &tx);
-        rx.try_recv().ok()
-    }
-
     #[test]
     fn progress_lines() {
-        match parse("SPLITTER-PROGRESS downloading 250 1000 NA") {
-            Some(Event::Progress(Some(p))) => assert!((p - 0.25).abs() < 1e-6),
-            _ => panic!("expected 25%"),
-        }
+        let frac = |line| match parse_progress(line) {
+            Some(Phase::Downloading(p)) => p,
+            _ => panic!("not a download line: {line}"),
+        };
+        assert!((frac("SPLITTER-PROGRESS downloading 250 1000 NA").unwrap() - 0.25).abs() < 1e-6);
         // Only an estimate of the size.
-        match parse("SPLITTER-PROGRESS downloading 500 NA 1000.5") {
-            Some(Event::Progress(Some(p))) => assert!((p - 0.5).abs() < 1e-3),
-            _ => panic!("expected 50%"),
-        }
-        assert!(matches!(parse("SPLITTER-PROGRESS downloading 500 NA NA"), Some(Event::Progress(None))));
-        assert!(matches!(parse("SPLITTER-PROGRESS finished 1000 1000 NA"), Some(Event::Converting)));
-        assert!(parse("[youtube] abc: Downloading webpage").is_none());
+        assert!((frac("SPLITTER-PROGRESS downloading 500 NA 1000.5").unwrap() - 0.5).abs() < 1e-3);
+        assert_eq!(frac("SPLITTER-PROGRESS downloading 500 NA NA"), None);
+        assert!(matches!(parse_progress("SPLITTER-PROGRESS finished 1000 1000 NA"), Some(Phase::Converting(None))));
+        assert!(parse_progress("[youtube] abc: Downloading webpage").is_none());
     }
 
-    /// Needs network, yt-dlp and ffmpeg: `cargo test -p splitter -- --ignored download`
+    /// Needs the network; installs the tools into the app's real tools folder on first run.
+    /// `cargo test -p splitter -- --ignored download`
     #[test]
     #[ignore]
     fn downloads_a_short_video() {
         let dir = std::env::temp_dir().join("splitter-download-test");
         let _ = std::fs::remove_dir_all(&dir);
-        let d = Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", &dir).unwrap();
-        let mut progressed = false;
+        let d = Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", &dir, &tools::dir()).unwrap();
+        let mut downloaded = false;
         loop {
-            match d.events.recv_timeout(std::time::Duration::from_secs(120)).expect("timed out") {
-                Event::Progress(Some(_)) => progressed = true,
-                Event::Progress(None) | Event::Converting => {}
+            match d.events.recv_timeout(std::time::Duration::from_secs(300)).expect("timed out") {
+                Event::Phase(Phase::Downloading(Some(_))) => downloaded = true,
+                Event::Phase(_) => {}
                 Event::Done(path) => {
-                    assert!(progressed);
+                    assert!(downloaded);
                     assert_eq!(path.extension().unwrap(), "wav");
                     assert_eq!(path.parent().unwrap(), dir);
-                    assert!(splitter_core::is_audio(&path));
+                    // 19 s of 44.1 kHz stereo 16-bit, and the .m4a is gone.
+                    let len = std::fs::metadata(&path).unwrap().len();
+                    assert!((3_000_000..3_600_000).contains(&len), "{len} bytes");
+                    assert!(!path.with_extension("m4a").exists());
                     break;
                 }
                 Event::Failed(e) => panic!("{e}"),

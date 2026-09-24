@@ -407,10 +407,12 @@ fn DownloadStatus() -> Element {
     let app = use_context::<state::App>();
     let Some(phase) = app.download.read().as_ref().map(|d| d.phase) else { return rsx! {} };
     let (label, frac) = match phase {
+        Phase::Installing(p) => (format!("Setting up the downloader (first time)… {}%", (p * 100.0) as u32), Some(p)),
         Phase::Starting => ("Fetching video info…".to_string(), None),
         Phase::Downloading(Some(p)) => (format!("Downloading… {}%", (p * 100.0) as u32), Some(p)),
         Phase::Downloading(None) => ("Downloading…".to_string(), None),
-        Phase::Converting => ("Converting to WAV…".to_string(), None),
+        Phase::Converting(Some(p)) => (format!("Converting to WAV… {}%", (p * 100.0) as u32), Some(p)),
+        Phase::Converting(None) => ("Converting to WAV…".to_string(), None),
     };
     rsx! {
         div { class: "download",
@@ -449,8 +451,9 @@ fn UrlDialog() -> Element {
             div { class: "modal", onclick: move |e| e.stop_propagation(),
                 h2 { "Open from URL" }
                 p { class: "dim",
-                    "The audio is downloaded with yt-dlp, converted to WAV and saved in {dir.display()}. "
-                    "Works with YouTube and most other video sites."
+                    "The audio is downloaded, converted to WAV and saved in {dir.display()}. "
+                    "Works with YouTube and most other video sites. "
+                    "The first time, the downloader (yt-dlp, about 75 MB) is set up automatically."
                 }
                 input {
                     class: "url",
