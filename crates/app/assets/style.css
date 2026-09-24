@@ -474,3 +474,39 @@ select.profile {
 .download .progress { margin: 0; width: 100%; }
 .progress.indeterminate > div { animation: pulse 1.2s ease-in-out infinite alternate; }
 @keyframes pulse { from { opacity: 0.25; } to { opacity: 0.8; } }
+
+/* "New version available" — pinned over the top edge until dismissed. */
+.update-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #0b1a26;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.update-banner-text { flex: 1; }
+.update-banner-text strong { font-weight: 700; }
+.update-banner-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(11, 26, 38, 0.4);
+  border-radius: 4px;
+}
+.update-banner-link:hover { background: rgba(255, 255, 255, 0.25); }
+.update-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.update-banner-dismiss:hover { opacity: 1; }
