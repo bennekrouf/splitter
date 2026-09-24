@@ -16,8 +16,17 @@ pub const AB_SECS: f64 = 12.0;
 pub enum AbState {
     #[default]
     Off,
-    Preparing { profile: Profile, start: u64, end: u64 },
-    Ready { profile: Profile, start: u64, end: u64, encoded: bool },
+    Preparing {
+        profile: Profile,
+        start: u64,
+        end: u64,
+    },
+    Ready {
+        profile: Profile,
+        start: u64,
+        end: u64,
+        encoded: bool,
+    },
 }
 
 pub type AbResult = Result<(Profile, u64, u64, Vec<f32>), String>;
@@ -38,7 +47,9 @@ impl App {
             _ => {}
         }
         if profile == Profile::Original {
-            self.error.set(Some("Pick an export format first: Original is the source itself, so there is nothing to compare.".into()));
+            self.error.set(Some(
+                "Pick an export format first: Original is the source itself, so there is nothing to compare.".into(),
+            ));
             return;
         }
         self.ab_start(profile, pos);

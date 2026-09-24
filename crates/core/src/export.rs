@@ -62,8 +62,12 @@ pub enum Profile {
     #[default]
     Original,
     /// LAME VBR, `-V quality` (0 = best).
-    Mp3Vbr { quality: u8 },
-    Mp3Cbr { kbps: u16 },
+    Mp3Vbr {
+        quality: u8,
+    },
+    Mp3Cbr {
+        kbps: u16,
+    },
     Flac,
     /// 16-bit PCM WAV.
     Wav16,
@@ -198,14 +202,20 @@ pub struct PlannedTrack {
     pub stem: String,
 }
 
-pub fn plan(edit: &RecordingEdit, total_samples: u64, source_stem: &str, settings: &ExportSettings) -> Vec<PlannedTrack> {
+pub fn plan(
+    edit: &RecordingEdit,
+    total_samples: u64,
+    source_stem: &str,
+    settings: &ExportSettings,
+) -> Vec<PlannedTrack> {
     let kept: Vec<_> = edit.tracks(total_samples).into_iter().filter(|t| !t.meta.drop && t.end > t.start).collect();
     let total = kept.len();
     let width = total.to_string().len().max(2);
     let mut out: Vec<PlannedTrack> = Vec::with_capacity(total);
     for (i, t) in kept.into_iter().enumerate() {
         let number = i + 1;
-        let title = if t.meta.title.trim().is_empty() { format!("Track {number}") } else { t.meta.title.trim().to_string() };
+        let title =
+            if t.meta.title.trim().is_empty() { format!("Track {number}") } else { t.meta.title.trim().to_string() };
         let name = settings
             .naming
             .replace("{nn}", &format!("{number:0width$}"))
@@ -234,7 +244,11 @@ pub fn sanitize(name: &str) -> String {
         .collect();
     let trimmed = cleaned.trim().trim_matches('.').trim();
     let short: String = trimmed.chars().take(180).collect();
-    if short.is_empty() { "untitled".into() } else { short }
+    if short.is_empty() {
+        "untitled".into()
+    } else {
+        short
+    }
 }
 
 #[cfg(test)]

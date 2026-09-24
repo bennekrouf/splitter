@@ -94,23 +94,15 @@ pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
             },
         ),
         None => match params.bits_per_sample {
-            Some(bits) => (
-                format!("PCM {bits}-bit"),
-                Bitrate::Pcm { bits, kbps: sample_rate * channels as u32 * bits / 1000 },
-            ),
+            Some(bits) => {
+                (format!("PCM {bits}-bit"), Bitrate::Pcm { bits, kbps: sample_rate * channels as u32 * bits / 1000 })
+            }
             None => ("PCM".to_string(), Bitrate::Unknown),
         },
     };
 
     Ok(Scan {
-        info: SourceInfo {
-            codec,
-            sample_rate,
-            channels: channels as u16,
-            total_samples: total,
-            file_size,
-            bitrate,
-        },
+        info: SourceInfo { codec, sample_rate, channels: channels as u16, total_samples: total, file_size, bitrate },
         mp3,
         peaks,
         loudness,
@@ -156,7 +148,13 @@ pub(crate) fn read_cached<T: DeserializeOwned>(path: &Path, ext: &str, magic: &[
     bincode::deserialize_from(&mut r).ok()
 }
 
-pub(crate) fn write_cached<T: Serialize>(path: &Path, ext: &str, magic: &[u8; 8], key: &CacheKey, value: &T) -> Result<()> {
+pub(crate) fn write_cached<T: Serialize>(
+    path: &Path,
+    ext: &str,
+    magic: &[u8; 8],
+    key: &CacheKey,
+    value: &T,
+) -> Result<()> {
     let file = cache_file(path, ext).ok_or_else(|| anyhow!("no cache dir"))?;
     std::fs::create_dir_all(file.parent().unwrap())?;
     let tmp = file.with_extension(format!("{ext}.tmp"));

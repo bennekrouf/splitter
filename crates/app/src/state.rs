@@ -1,11 +1,11 @@
 //! App state and the actions the UI and keyboard trigger.
 
+use crate::exporting::{ExportStatus, Exporter};
 use dioxus::prelude::*;
+use splitter_audio::loudness::LoudnessMap;
 use splitter_audio::{Player, Scan, ScanEvent, Scanner};
 use splitter_core::cutlist::Cutlist;
 use splitter_core::edit::{History, Snapshot};
-use crate::exporting::{ExportStatus, Exporter};
-use splitter_audio::loudness::LoudnessMap;
 use splitter_core::{list_recordings, Recording, Status};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -288,7 +288,11 @@ impl App {
         // Keep the playhead at the same relative spot if it's on screen, else zoom around the middle.
         let pos = *self.pos.peek() as f64;
         let old_span = v.span_secs * rate;
-        let anchor = if pos >= v.start as f64 && pos < v.start as f64 + old_span { pos } else { v.start as f64 + old_span / 2.0 };
+        let anchor = if pos >= v.start as f64 && pos < v.start as f64 + old_span {
+            pos
+        } else {
+            v.start as f64 + old_span / 2.0
+        };
         let rel = (anchor - v.start as f64) / old_span;
         let start = (anchor - rel * span_secs * rate).max(0.0) as u64;
         let max_start = scan.info.total_samples.saturating_sub((span_secs * rate) as u64);

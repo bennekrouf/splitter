@@ -263,12 +263,18 @@ impl flacenc::source::Source for FlacFeed<'_> {
     }
 }
 
-fn encode_flac(src: &mut dyn PcmSource, start: u64, end: u64, bits: usize, tags: &Tags, out: &mut dyn Write) -> Result<()> {
+fn encode_flac(
+    src: &mut dyn PcmSource,
+    start: u64,
+    end: u64,
+    bits: usize,
+    tags: &Tags,
+    out: &mut dyn Write,
+) -> Result<()> {
     let ch = src.channels();
     src.seek(start)?;
-    let config = flacenc::config::Encoder::default()
-        .into_verified()
-        .map_err(|(_, e)| anyhow!("FLAC settings: {e:?}"))?;
+    let config =
+        flacenc::config::Encoder::default().into_verified().map_err(|(_, e)| anyhow!("FLAC settings: {e:?}"))?;
     let mut error = None;
     let feed = FlacFeed {
         src,
@@ -409,7 +415,8 @@ fn decode_gapless(bytes: Vec<u8>) -> Result<Vec<f32>> {
     use symphonia::core::io::MediaSourceStream;
     let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
     let opts = FormatOptions { enable_gapless: true, ..Default::default() };
-    let mut format = symphonia::default::get_probe().format(&Default::default(), mss, &opts, &Default::default())?.format;
+    let mut format =
+        symphonia::default::get_probe().format(&Default::default(), mss, &opts, &Default::default())?.format;
     let track = format.default_track().ok_or_else(|| anyhow!("no track"))?.clone();
     let mut dec = symphonia::default::get_codecs().make(&track.codec_params, &Default::default())?;
     let mut out = Vec::new();

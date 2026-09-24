@@ -14,12 +14,12 @@ use crate::mp3index::{parse_header, Mp3Index};
 use crate::scan::{Bitrate, Scan};
 use crate::source::open_source;
 use crate::transcode::encode_track;
-use splitter_core::export::Profile;
-use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
+use splitter_core::export::Profile;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Samples every MP3 decoder outputs before the first real sample (LAME convention).
 const DECODER_DELAY: u64 = 529;

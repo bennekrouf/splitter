@@ -4,11 +4,11 @@
 
 use crate::export::{ExportJob, ReplayGain};
 use crate::scan::{read_cached, write_cached, CacheKey, Scan};
-use splitter_core::export::Normalize;
-use splitter_core::loudness::{normalize_gain, REPLAYGAIN_REFERENCE};
 use crate::source::open_source;
 use anyhow::{anyhow, Result};
 use ebur128::{EbuR128, Mode};
+use splitter_core::export::Normalize;
+use splitter_core::loudness::{normalize_gain, REPLAYGAIN_REFERENCE};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,7 +21,8 @@ pub fn analyze(path: &Path, scan: &Scan, progress: &mut dyn FnMut(f32)) -> Resul
     let ch = src.channels();
     let rate = src.sample_rate();
     let hop = (rate / 10).max(1) as u64;
-    let mut ebu = EbuR128::new(ch as u32, rate, Mode::M | Mode::TRUE_PEAK).map_err(|e| anyhow!("loudness meter: {e:?}"))?;
+    let mut ebu =
+        EbuR128::new(ch as u32, rate, Mode::M | Mode::TRUE_PEAK).map_err(|e| anyhow!("loudness meter: {e:?}"))?;
     let mut map = LoudnessMap { hop, ..Default::default() };
     let total = scan.info.total_samples.max(1);
     let hop_len = hop as usize * ch;

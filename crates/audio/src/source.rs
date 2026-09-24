@@ -79,9 +79,7 @@ impl Decoding {
         loop {
             let packet = match self.format.next_packet() {
                 Ok(p) => p,
-                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    return Ok(false)
-                }
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(false),
                 Err(e) => return Err(e.into()),
             };
             if packet.track_id() != self.track_id {
@@ -187,10 +185,8 @@ impl PcmSource for GenericSource {
     }
 
     fn seek(&mut self, frame: u64) -> Result<()> {
-        let seeked = self
-            .dec
-            .format
-            .seek(SeekMode::Accurate, SeekTo::TimeStamp { ts: frame, track_id: self.dec.track_id })?;
+        let seeked =
+            self.dec.format.seek(SeekMode::Accurate, SeekTo::TimeStamp { ts: frame, track_id: self.dec.track_id })?;
         self.dec.decoder.reset();
         self.dec.discard = seeked.required_ts.saturating_sub(seeked.actual_ts);
         Ok(())

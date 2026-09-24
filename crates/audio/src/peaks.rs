@@ -24,10 +24,7 @@ impl Peaks {
             return vec![(0.0, 0.0); n];
         }
         let per_col = (end - start) as f64 / n as f64;
-        let level = (0..self.levels.len())
-            .rev()
-            .find(|&l| Self::bucket(l) as f64 <= per_col)
-            .unwrap_or(0);
+        let level = (0..self.levels.len()).rev().find(|&l| Self::bucket(l) as f64 <= per_col).unwrap_or(0);
         let bucket = Self::bucket(level) as f64;
         let data = &self.levels[level];
 

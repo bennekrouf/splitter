@@ -372,9 +372,7 @@ impl Engine {
         let source = open_source(&path, mp3)?;
         let src_rate = source.sample_rate();
 
-        let device = cpal::default_host()
-            .default_output_device()
-            .ok_or_else(|| anyhow!("no audio output device"))?;
+        let device = cpal::default_host().default_output_device().ok_or_else(|| anyhow!("no audio output device"))?;
         let config = pick_config(&device, src_rate)?;
         let dev_rate = config.sample_rate.0;
         let dev_channels = config.channels as usize;

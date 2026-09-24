@@ -6,9 +6,9 @@ use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
 use splitter_audio::{Bitrate, Scan};
 use splitter_core::edit::SplitState;
-use splitter_core::time::{fmt_precise, fmt_short};
 use splitter_core::export::{plan, Normalize, Profile};
 use splitter_core::loudness::Loudness;
+use splitter_core::time::{fmt_precise, fmt_short};
 use splitter_core::tracklist;
 use splitter_core::Status;
 use std::fmt::Write;
@@ -26,13 +26,11 @@ const GRAB_PX: f64 = 6.0;
 pub fn App() -> Element {
     let app = use_context_provider(state::App::new);
 
-    use_hook(move || {
-        match std::env::args().nth(1) {
-            Some(arg) => app.open(std::path::Path::new(&arg)),
-            None => {
-                if let Some(dir) = state::prefs::last_folder() {
-                    app.open(&dir);
-                }
+    use_hook(move || match std::env::args().nth(1) {
+        Some(arg) => app.open(std::path::Path::new(&arg)),
+        None => {
+            if let Some(dir) = state::prefs::last_folder() {
+                app.open(&dir);
             }
         }
     });
@@ -50,7 +48,13 @@ pub fn App() -> Element {
         }
         let m = e.modifiers();
         let cmd = m.meta() || m.ctrl();
-        let step = if m.alt() { 0.01 } else if m.shift() { 0.5 } else { 5.0 };
+        let step = if m.alt() {
+            0.01
+        } else if m.shift() {
+            0.5
+        } else {
+            5.0
+        };
         let nudge = if m.shift() { 0.1 } else { 0.01 };
         let handled = match e.code() {
             // Playback and navigation
@@ -229,7 +233,9 @@ fn Sidebar() -> Element {
             Some(n) => format!("{n} — Splitter"),
             None => "Splitter".into(),
         });
-        document::eval("requestAnimationFrame(() => document.querySelector('.item.selected')?.scrollIntoView({block: 'nearest'}))");
+        document::eval(
+            "requestAnimationFrame(() => document.querySelector('.item.selected')?.scrollIntoView({block: 'nearest'}))",
+        );
     });
 
     rsx! {
@@ -925,7 +931,9 @@ fn TrackList(scan: ScanRef) -> Element {
     // Keep the current row visible.
     use_effect(move || {
         let _ = current();
-        document::eval("requestAnimationFrame(() => document.querySelector('.track.current')?.scrollIntoView({block: 'nearest'}))");
+        document::eval(
+            "requestAnimationFrame(() => document.querySelector('.track.current')?.scrollIntoView({block: 'nearest'}))",
+        );
     });
 
     let rate = scan.0.info.sample_rate as f64;

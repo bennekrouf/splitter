@@ -1,0 +1,3 @@
+# Lines up to 120 columns: the audio and review code reads better with fewer wraps.
+max_width = 120
+use_small_heuristics = "Max"

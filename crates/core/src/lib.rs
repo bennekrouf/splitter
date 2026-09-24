@@ -35,10 +35,7 @@ impl Recording {
     }
 
     pub fn name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
+        self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     }
 }
 

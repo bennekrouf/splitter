@@ -36,7 +36,13 @@ fn check_export(source: &Path, name: &str) {
             end: w[1],
             path: dir.join(format!("{:02}.{ext}", i + 1)),
             gain_db: 0.0,
-            tags: Tags { replaygain: None, title: format!("Track {}", i + 1), album: "Test".into(), track: i + 1, total: 6 },
+            tags: Tags {
+                replaygain: None,
+                title: format!("Track {}", i + 1),
+                album: "Test".into(),
+                track: i + 1,
+                total: 6,
+            },
         })
         .collect();
     let mut done = 0;

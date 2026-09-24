@@ -78,7 +78,13 @@ fn main() {
                 end: t.end,
                 path: out.join(format!("{}.{ext}", t.stem)),
                 gain_db: 0.0,
-                tags: Tags { replaygain: None, title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total },
+                tags: Tags {
+                    replaygain: None,
+                    title: t.title.clone(),
+                    album: stem.clone(),
+                    track: t.number,
+                    total: t.total,
+                },
             })
             .collect();
 
@@ -109,7 +115,9 @@ fn main() {
                 let ok = got == want;
                 failures += !ok as usize;
                 let out_scan = scanning::scan(&job.path, &mut |_| {}).expect("rescan");
-                let l = analyze(&job.path, &out_scan, &mut |_| {}).expect("reanalyze").range(0, out_scan.info.total_samples);
+                let l = analyze(&job.path, &out_scan, &mut |_| {})
+                    .expect("reanalyze")
+                    .range(0, out_scan.info.total_samples);
                 println!(
                     "  {} {:>9.3}s  gain {:+5.1} dB → {:>6.1} LUFS, peak {:>5.1} dBTP  {}",
                     if ok { "ok  " } else { "FAIL" },
@@ -134,10 +142,8 @@ fn gapless_frames(path: &std::path::Path) -> u64 {
     use symphonia::core::io::MediaSourceStream;
     let mss = MediaSourceStream::new(Box::new(std::fs::File::open(path).unwrap()), Default::default());
     let opts = FormatOptions { enable_gapless: true, ..Default::default() };
-    let mut format = symphonia::default::get_probe()
-        .format(&Default::default(), mss, &opts, &Default::default())
-        .unwrap()
-        .format;
+    let mut format =
+        symphonia::default::get_probe().format(&Default::default(), mss, &opts, &Default::default()).unwrap().format;
     let track = format.default_track().unwrap().clone();
     let mut dec = symphonia::default::get_codecs().make(&track.codec_params, &Default::default()).unwrap();
     let mut frames = 0;

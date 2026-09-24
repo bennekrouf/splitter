@@ -210,7 +210,11 @@ impl App {
             let h = hist.entry(key.clone()).or_default();
             let mut cl = self.cutlist.write();
             let edit = cl.recordings.entry(key).or_default();
-            if undo { h.undo(edit) } else { h.redo(edit) }
+            if undo {
+                h.undo(edit)
+            } else {
+                h.redo(edit)
+            }
         };
         let Some(changed_split) = changed else { return };
         self.mark_dirty();

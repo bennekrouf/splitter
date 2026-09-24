@@ -19,8 +19,14 @@ pub enum ExportStatus {
     Queued,
     /// Measuring loudness before a normalized export.
     Measuring,
-    Running { done: usize, total: usize },
-    Finished { dir: PathBuf, count: usize },
+    Running {
+        done: usize,
+        total: usize,
+    },
+    Finished {
+        dir: PathBuf,
+        count: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -152,7 +158,13 @@ impl App {
                 end: t.end,
                 path: dir.join(format!("{}.{ext}", t.stem)),
                 gain_db: 0.0,
-                tags: Tags { title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total, replaygain: None },
+                tags: Tags {
+                    title: t.title.clone(),
+                    album: stem.clone(),
+                    track: t.number,
+                    total: t.total,
+                    replaygain: None,
+                },
             })
             .collect();
         let exporter = self.exporter.peek().clone();
