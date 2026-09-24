@@ -71,3 +71,25 @@ jobs:
       # has no warnings to grandfather in.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ── Windows: blocking ──────────────────────────────────────────────────────
+  # Otherwise Windows only builds in release.yml, after a tag. This catches
+  # Windows-only breakage (cfg(windows) code, WebView2, the MSVC builds of LAME
+  # and ring) and runs the same tests there, e.g. the local media server's.
+  # The windows-latest image has MSVC and the Windows SDK, as the release uses.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

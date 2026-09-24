@@ -53,15 +53,12 @@ pub async fn check() -> Option<UpdateInfo> {
     }
     let body = tokio::task::spawn_blocking(fetch).await.ok()??;
     let latest: LatestJson = serde_json::from_str(&body).ok()?;
-    is_newer(&latest.version, env!("CARGO_PKG_VERSION")).then(|| UpdateInfo {
-        download_url: platform_url(&latest.platforms),
-        latest_version: latest.version,
-    })
+    is_newer(&latest.version, env!("CARGO_PKG_VERSION"))
+        .then(|| UpdateInfo { download_url: platform_url(&latest.platforms), latest_version: latest.version })
 }
 
 fn fetch() -> Option<String> {
-    let agent: ureq::Agent =
-        ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(5))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(5))).build().into();
     agent.get(LATEST_URL).header("User-Agent", USER_AGENT).call().ok()?.body_mut().read_to_string().ok()
 }
 
