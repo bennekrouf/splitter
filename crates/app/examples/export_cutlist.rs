@@ -8,7 +8,7 @@
 //! Loudness is always measured, so tracks get ReplayGain tags; with `--verify` each exported
 //! track is measured again and its loudness printed.
 
-use splitter_audio::export::{export, ExportJob, Tags};
+use splitter_audio::export::{can_copy, export, ExportJob, Tags};
 use splitter_audio::loudness::{analyze, apply_to_jobs, load_or_analyze};
 use splitter_audio::scan::{self as scanning, load_or_scan};
 use splitter_core::cutlist::Cutlist;
@@ -58,14 +58,19 @@ fn main() {
     if let Some(n) = normalize_arg {
         cutlist.export.normalize = n;
     }
-    let profile = cutlist.export.profile;
+    let chosen = cutlist.export.profile;
     let normalize = cutlist.export.normalize;
-    println!("profile: {} · {}", profile.label(), normalize.label());
+    println!("profile: {} · {}", chosen.label(), normalize.label());
     let mut failures = 0;
 
     for (name, edit) in &cutlist.recordings {
         let path = dir.join(name);
         let scan = load_or_scan(&path, &mut |_| {}).expect("scan");
+        // Like the app (`Profile::effective`): a video's audio can't be copied, so FLAC.
+        let profile = match chosen {
+            Profile::Original if !can_copy(&path, &scan) => Profile::Flac,
+            p => p,
+        };
         let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
         let src_ext = path.extension().unwrap().to_string_lossy().to_lowercase();
         let ext = profile.extension(&src_ext);

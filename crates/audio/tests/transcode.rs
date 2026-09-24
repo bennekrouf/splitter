@@ -149,3 +149,28 @@ fn kept_ranges_are_written_back_to_back() {
         assert!(max_diff(&got, &want) <= 1.0 / 32768.0 + 1e-6, "{name}: {}", max_diff(&got, &want));
     }
 }
+
+/// Audio inside a video can't be copied as is; re-encoding it cuts exactly `[A, B)`.
+#[test]
+fn video_audio_exports_by_reencoding() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video.mp4");
+    let s = scan(&src, &mut |_| {}).unwrap();
+    assert!(!splitter_audio::export::can_copy(&src, &s));
+    let job = |path: PathBuf| ExportJob {
+        start: A,
+        end: B,
+        path,
+        gain_db: 0.0,
+        tags: Tags { replaygain: None, title: "Clip".into(), album: "Video".into(), track: 1, total: 1 },
+    };
+    let original = tmp("transcode").join("video-original.mp4");
+    assert!(export(&src, &s, &[job(original.clone())], Profile::Original, &mut |_| {}).is_err());
+    assert!(!original.exists());
+
+    let (pcm, ch) = source_pcm(&src);
+    let out = export_one(&src, Profile::Flac, "video-flac");
+    let got = decode_gapless(&out);
+    let want = &pcm[A as usize * ch..B as usize * ch];
+    assert_eq!(got.len(), want.len());
+    assert!(max_diff(&got, want) < 1.0 / 32768.0 * 1.5, "FLAC of the decoded AAC must match it");
+}
