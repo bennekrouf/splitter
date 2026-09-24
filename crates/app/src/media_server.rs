@@ -6,7 +6,14 @@
 //!
 //! Only files registered with `publish` are served, each under a random token, and only to
 //! the loopback address.
+//!
+//! Some web views may refuse to load media from 127.0.0.1 (Chromium, and so WebView2 on
+//! Windows, is starting to restrict pages reaching local addresses). The same files are then
+//! served through the app's own page protocol instead (`in_app_path`, `in_app_response`):
+//! slower in WebKit, which asks for it in tiny pieces on the UI thread, but same-origin.
 
+use dioxus::desktop::wry::http::{header, Request, Response, StatusCode};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -57,6 +64,47 @@ pub fn unpublish(url: &str) {
     if let Some(server) = server() {
         server.files.lock().unwrap().remove(token_of(url));
     }
+}
+
+/// Longest byte range answered at once through the app's own protocol, which holds it in
+/// memory; the web view asks again for the rest.
+const IN_APP_CHUNK: u64 = 4 << 20;
+
+/// The same-origin path, for the app's own protocol, of what `publish` returned `url` for.
+pub fn in_app_path(url: &str) -> String {
+    format!("/media/{}", url.rsplit('/').next().unwrap_or(""))
+}
+
+/// Answer a request for an `in_app_path` (register it for "media" with `use_asset_handler`).
+/// Reads the file, so call it off the UI thread.
+pub fn in_app_response(request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    let empty = |status| Response::builder().status(status).body(Cow::Borrowed(&[][..])).unwrap();
+    let path = server().and_then(|s| s.files.lock().unwrap().get(token_of(request.uri().path())).cloned());
+    let Some(path) = path else { return empty(StatusCode::NOT_FOUND) };
+    let Ok(mut file) = File::open(&path) else { return empty(StatusCode::NOT_FOUND) };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return empty(StatusCode::INTERNAL_SERVER_ERROR) };
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok());
+    let Some((start, end)) = byte_range(range, len) else {
+        return Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{len}"))
+            .body(Cow::Borrowed(&[][..]))
+            .unwrap();
+    };
+    // Always partial content (even without a Range header), so the web view knows it can seek.
+    let end = end.min(start + IN_APP_CHUNK - 1);
+    let mut body = vec![0; (end - start + 1) as usize];
+    if file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut body)).is_err() {
+        return empty(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, content_type(&path))
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"))
+        .header(header::CONTENT_LENGTH, body.len().to_string())
+        .body(Cow::Owned(body))
+        .unwrap()
 }
 
 /// The token in a URL path (`/<token>.<ext>`).
@@ -223,7 +271,22 @@ mod tests {
 
         let (base, _) = url.rsplit_once('/').unwrap();
         assert!(get(&format!("{base}/guess.mp4"), None).starts_with("HTTP/1.1 404"));
+        // The same file through the app's own protocol, under the same token.
+        let in_app = |range: Option<&str>| {
+            let mut req = Request::builder().uri(format!("dioxus://index.html{}", in_app_path(&url)));
+            if let Some(r) = range {
+                req = req.header(header::RANGE, r);
+            }
+            in_app_response(&req.body(Vec::new()).unwrap())
+        };
+        let r = in_app(Some("bytes=2-4"));
+        assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(r.headers()[header::CONTENT_RANGE], "bytes 2-4/10");
+        assert_eq!(&r.body()[..], b"234");
+        assert_eq!(&in_app(None).body()[..], b"0123456789");
+
         unpublish(&url);
         assert!(get(&url, None).starts_with("HTTP/1.1 404"));
+        assert_eq!(in_app(None).status(), StatusCode::NOT_FOUND);
     }
 }

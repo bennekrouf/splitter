@@ -34,8 +34,9 @@ splits, silences and track names. Its sound is scanned, played and split like an
 (silence detection, review keys, preview cuts, loudness).
 
 The picture is played muted by the system's web view, from a small HTTP server on 127.0.0.1
-that serves only the selected file under a random token, and follows the audio player's
-playhead: the exact frame while paused, within a few tens of ms while playing. A web view that
+that serves only the selected file under a random token (if the web view won't load from there,
+e.g. WebView2 restricting local addresses, it switches to the app's own page protocol), and
+follows the audio player's playhead: the exact frame while paused, within a few tens of ms while playing. A web view that
 can't decode the video (e.g. HEVC on Windows without its extension, or Linux without
 GStreamer's H.264 plugin) shows a note; the sound works as usual.
 
