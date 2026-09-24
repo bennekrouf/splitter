@@ -288,6 +288,64 @@ impl RecordingEdit {
             .collect()
     }
 
+    /// What the export leaves out, as merged `[start, end)` ranges: cut silence and dropped
+    /// tracks. Playing everything else sounds like the exported tracks back to back.
+    pub fn skipped(&self, total: u64) -> Vec<(u64, u64)> {
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        for t in self.tracks(total) {
+            let parts = if t.exported() {
+                [(t.start, t.audio_start), (t.audio_end, t.end)]
+            } else {
+                [(t.start, t.end), (t.end, t.end)]
+            };
+            for (a, b) in parts.into_iter().filter(|(a, b)| a < b) {
+                match out.last_mut() {
+                    Some(last) if last.1 >= a => last.1 = last.1.max(b),
+                    _ => out.push((a, b)),
+                }
+            }
+        }
+        out
+    }
+
+    /// The cleaned recording: the exported tracks' audio back to back, as `[start, end)` source
+    /// ranges, plus the edit that goes with it (a confirmed split between consecutive tracks,
+    /// titles kept, nothing left to cut). Empty if nothing would be kept.
+    pub fn cleaned(&self, total: u64) -> (Vec<(u64, u64)>, RecordingEdit) {
+        let kept: Vec<Track<'_>> = self.tracks(total).into_iter().filter(|t| t.exported()).collect();
+        let ranges = kept.iter().map(|t| (t.audio_start, t.audio_end)).collect();
+        let mut edit =
+            RecordingEdit { detect: self.detect, detected: true, silences_detected: true, ..Default::default() };
+        let mut at = 0;
+        for (i, t) in kept.iter().enumerate() {
+            let meta = TrackMeta { title: t.meta.title.clone(), drop: false };
+            if i == 0 {
+                edit.head = meta;
+            } else {
+                edit.splits.push(Split { track: meta, ..Split::confirmed(at) });
+            }
+            at += t.audio_len();
+        }
+        (ranges, edit)
+    }
+
+    /// Each track's name as shown and exported: its title, or "Track N" by its number among the
+    /// exported tracks. `None` for an untitled track that isn't exported.
+    pub fn names(&self, total: u64) -> Vec<Option<String>> {
+        let mut n = 0;
+        self.tracks(total)
+            .iter()
+            .map(|t| {
+                n += t.exported() as usize;
+                match t.meta.title.trim() {
+                    "" if t.exported() => Some(format!("Track {n}")),
+                    "" => None,
+                    title => Some(title.to_string()),
+                }
+            })
+            .collect()
+    }
+
     pub fn track_meta_mut(&mut self, index: usize) -> Option<&mut TrackMeta> {
         match index {
             0 => Some(&mut self.head),
@@ -318,6 +376,10 @@ pub struct History {
 
 impl History {
     const LIMIT: usize = 500;
+
+    pub fn can_undo(&self) -> bool {
+        !self.past.is_empty()
+    }
 
     /// Record the state *before* a change.
     pub fn record(&mut self, before: Snapshot) {
@@ -453,6 +515,58 @@ mod tests {
         assert!(e.silences[0].keep);
         assert_eq!(e.silence_at(45), None);
         assert_eq!(e.silence_at(54), None);
+    }
+
+    #[test]
+    fn skipped_is_what_the_export_leaves_out() {
+        let mut e = RecordingEdit::default();
+        for at in [50, 100] {
+            e.insert(sugg(at));
+        }
+        e.set_silences(vec![
+            Silence { start: 0, end: 5, keep: false },
+            Silence { start: 45, end: 55, keep: false },
+            Silence { start: 95, end: 105, keep: false },
+        ]);
+        assert_eq!(e.skipped(150), [(0, 5), (45, 55), (95, 105)]);
+        // Leaving out the middle track merges it with the silence on both sides.
+        e.track_meta_mut(1).unwrap().drop = true;
+        assert_eq!(e.skipped(150), [(0, 5), (45, 105)]);
+    }
+
+    #[test]
+    fn cleaned_keeps_exported_audio_and_titles() {
+        let mut e = RecordingEdit::default();
+        for at in [50, 100] {
+            e.insert(sugg(at));
+        }
+        e.set_silences(vec![
+            Silence { start: 0, end: 5, keep: false },
+            Silence { start: 45, end: 55, keep: false },
+            Silence { start: 140, end: u64::MAX, keep: false },
+        ]);
+        e.head.title = "Intro".into();
+        e.track_meta_mut(1).unwrap().drop = true; // talk
+        e.track_meta_mut(2).unwrap().title = "Song".into();
+        let (ranges, c) = e.cleaned(150);
+        assert_eq!(ranges, [(5, 45), (100, 140)]);
+        let tracks: Vec<(u64, u64, &str)> =
+            c.tracks(80).iter().map(|t| (t.start, t.end, t.meta.title.as_str())).collect();
+        assert_eq!(tracks, [(0, 40, "Intro"), (40, 80, "Song")]);
+        assert_eq!(c.counts(), (1, 0), "already reviewed");
+        assert!(c.skipped(80).is_empty(), "nothing left to cut");
+    }
+
+    #[test]
+    fn untitled_tracks_are_named_by_export_number() {
+        let mut e = RecordingEdit::default();
+        for at in [10, 20, 30] {
+            e.insert(sugg(at));
+        }
+        e.track_meta_mut(1).unwrap().drop = true;
+        e.track_meta_mut(2).unwrap().title = " Song ".into();
+        let names = e.names(40);
+        assert_eq!(names, [Some("Track 1".into()), None, Some("Song".into()), Some("Track 3".into())]);
     }
 
     #[test]

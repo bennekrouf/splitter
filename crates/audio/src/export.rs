@@ -329,15 +329,15 @@ pub(crate) fn id3v2(tags: &Tags) -> Vec<u8> {
 // WAV
 
 #[derive(Debug)]
-struct WavLayout {
-    fmt: Vec<u8>,
-    data_offset: u64,
-    data_len: u64,
-    block_align: u64,
+pub(crate) struct WavLayout {
+    pub(crate) fmt: Vec<u8>,
+    pub(crate) data_offset: u64,
+    pub(crate) data_len: u64,
+    pub(crate) block_align: u64,
 }
 
 impl WavLayout {
-    fn read(f: &mut File) -> Result<Self> {
+    pub(crate) fn read(f: &mut File) -> Result<Self> {
         let mut head = [0u8; 12];
         f.seek(SeekFrom::Start(0))?;
         f.read_exact(&mut head)?;
