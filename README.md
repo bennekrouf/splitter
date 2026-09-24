@@ -163,6 +163,29 @@ columns follow every split change. Peaks above −1 dBTP are shown in red.
   The gain never pushes the true peak above −1 dBTP. Original (byte copy) can't change level,
   so it only gets the tags.
 
+## Building and releasing
+
+Same setup as GitAgent and the ais-* apps.
+
+- **Icon**: `crates/app/assets/icon.svg` is the source; `icon.png` (1024 px) is rendered from it
+  (`rsvg-convert -w 1024 -h 1024 icon.svg -o icon.png`). The app sets it as the window icon at
+  runtime; release CI turns it into `icon.icns` (macOS) and `icon.ico` (Windows, embedded in
+  the .exe by `crates/app/build.rs`), and ships the PNG for the Linux launcher.
+- **CI** (`.github/workflows/ci.yml`, on pull requests): `cargo fmt --check`, tests, and clippy
+  with warnings as errors.
+- **Release** (`.github/workflows/release.yml`, on a `v*` tag or run by hand from the Actions
+  tab): a signed and notarized `.dmg` for Apple Silicon, a signed Inno Setup installer for
+  Windows (`installer/installer.iss`), and a Linux x86_64 tarball with `scripts/setup-linux.sh`
+  (installs WebKitGTK and ALSA, and adds a launcher). Artifacts are published to
+  `mayorana.ch/downloads/splitter/{<tag>,latest}/` with a `latest.json`.
+- **Cutting a release**: `./scripts/release.sh` (patch bump, or `--minor`, `--major`, a version,
+  or `--dry-run`) bumps the workspace version, tags and pushes.
+
+Signing and publishing need the same repository secrets as the other apps: the seven macOS
+ones (`MACOS_*`, `KEYCHAIN_PASSWORD`, `APP_STORE_CONNECT_*`), the six Azure Trusted Signing ones
+for Windows, and `DIST_SSH_*` for the upload. Without the macOS secrets the release skips the
+.dmg; without the Windows ones the installer ships unsigned.
+
 ## How it works
 
 - **Scan (once per file, cached in `~/Library/Caches/splitter`)**: builds a byte-offset index of every

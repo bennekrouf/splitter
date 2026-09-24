@@ -1,0 +1,659 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  # ── Manual trigger from the GitHub Actions UI ──────────────────────────────
+  # Go to Actions → Release → Run workflow → enter version (e.g. 0.3.2)
+  # Leave empty to auto-bump the patch version.
+  # This bumps Cargo.toml, commits, tags, and pushes — then the normal
+  # build/release pipeline runs exactly as if you'd pushed a tag.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.3.2) — empty = auto-bump patch'
+        required: false
+        default: ''
+      bump:
+        description: 'Bump type if version is empty'
+        required: false
+        default: 'patch'
+        type: choice
+        options: [patch, minor, major]
+
+# Allow the workflow to push the version-bump commit + tag back to the repo
+permissions:
+  contents: write
+
+jobs:
+  # ── When triggered via workflow_dispatch: bump version and create the tag ──
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bump version and tag
+        id: bump
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          BUMP_TYPE: ${{ inputs.bump }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          if [[ -n "$VERSION_INPUT" ]]; then
+            NEW="$VERSION_INPUT"
+          elif [[ "$BUMP_TYPE" == "major" ]]; then
+            NEW="$((MAJOR+1)).0.0"
+          elif [[ "$BUMP_TYPE" == "minor" ]]; then
+            NEW="$MAJOR.$((MINOR+1)).0"
+          else
+            NEW="$MAJOR.$MINOR.$((PATCH+1))"
+          fi
+
+          TAG="v$NEW"
+          echo "Bumping $CURRENT → $NEW (tag: $TAG)"
+
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW\"/" Cargo.toml
+
+          git add Cargo.toml
+          git commit -m "chore: release $TAG"
+          git tag "$TAG"
+          git push origin HEAD
+          git push origin "$TAG"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build-mac:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: macos-latest  # arm64 (Apple Silicon)
+    env:
+      SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APP_STORE_KEY:        ${{ secrets.APP_STORE_CONNECT_KEY }}
+      APP_STORE_KEY_ID:     ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_ISSUER_ID:  ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-macos-arm64-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # ── Sanity-check required signing secrets up front ─────────────────────
+      - name: Check macOS signing secrets
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          missing=()
+          [ -z "${SIGNING_IDENTITY:-}"      ] && missing+=("MACOS_SIGNING_IDENTITY")
+          [ -z "${APP_STORE_KEY:-}"        ] && missing+=("APP_STORE_CONNECT_KEY")
+          [ -z "${APP_STORE_KEY_ID:-}"     ] && missing+=("APP_STORE_CONNECT_KEY_ID")
+          [ -z "${APP_STORE_ISSUER_ID:-}"  ] && missing+=("APP_STORE_CONNECT_ISSUER_ID")
+          [ -z "${MACOS_CERTIFICATE:-}"     ] && missing+=("MACOS_CERTIFICATE")
+          [ -z "${MACOS_CERTIFICATE_PWD:-}" ] && missing+=("MACOS_CERTIFICATE_PWD")
+          [ -z "${KEYCHAIN_PASSWORD:-}"     ] && missing+=("KEYCHAIN_PASSWORD")
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All 7 macOS signing secrets present."
+            echo "HAVE_MAC_SECRETS=true" >> "$GITHUB_ENV"
+          elif [ ${#missing[@]} -eq 7 ]; then
+            echo "::warning::No macOS signing secrets configured — skipping the macOS \
+          build. The release will still ship the other platforms. Add the 7 secrets \
+          in Settings → Secrets and variables → Actions to include a signed .dmg."
+            echo "HAVE_MAC_SECRETS=false" >> "$GITHUB_ENV"
+          else
+            echo "::error::Incomplete macOS signing configuration. Missing: ${missing[*]}"
+            echo "Set all seven, or none at all to skip the macOS build."
+            exit 1
+          fi
+
+      # ── Import Developer ID cert into a temporary keychain ─────────────────
+      - name: Set up signing keychain
+        if: env.HAVE_MAC_SECRETS == 'true'
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain  -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin
+
+      # ── Sign the binary with hardened runtime + webview entitlements ───────
+      - name: Codesign binary
+        if: env.HAVE_MAC_SECRETS == 'true'
+        run: |
+          set -euo pipefail
+          BIN=target/aarch64-apple-darwin/release/splitter
+          codesign --force --options runtime --timestamp \
+            --entitlements .github/macos-entitlements.plist \
+            --sign "$SIGNING_IDENTITY" \
+            "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+
+      # ── Generate icon.icns from crates/app/assets/icon.png (1024x1024 source) ─
+      # No-op if the PNG is absent; bundle just ships icon-less in that case.
+      - name: Generate macOS .icns
+        if: env.HAVE_MAC_SECRETS == 'true'
+        run: |
+          set -euo pipefail
+          if [ ! -f crates/app/assets/icon.png ]; then
+            echo "::warning::crates/app/assets/icon.png not found — .app will ship without an icon."
+            exit 0
+          fi
+          ICONSET="$RUNNER_TEMP/icon.iconset"
+          mkdir -p "$ICONSET"
+          for size in 16 32 64 128 256 512 1024; do
+            sips -z $size $size crates/app/assets/icon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+          done
+          # Retina (@2x) variants — Apple expects these for crisp scaling.
+          cp "$ICONSET/icon_32x32.png"     "$ICONSET/icon_16x16@2x.png"
+          cp "$ICONSET/icon_64x64.png"     "$ICONSET/icon_32x32@2x.png"
+          cp "$ICONSET/icon_256x256.png"   "$ICONSET/icon_128x128@2x.png"
+          cp "$ICONSET/icon_512x512.png"   "$ICONSET/icon_256x256@2x.png"
+          cp "$ICONSET/icon_1024x1024.png" "$ICONSET/icon_512x512@2x.png"
+          rm "$ICONSET/icon_64x64.png" "$ICONSET/icon_1024x1024.png"
+          mkdir -p dist
+          iconutil -c icns "$ICONSET" -o dist/icon.icns
+
+      # ── Wrap binary in .app bundle, build signed + notarized + stapled DMG ─
+      - name: Build .app + .dmg
+        if: env.HAVE_MAC_SECRETS == 'true'
+        run: |
+          set -euo pipefail
+          BIN=target/aarch64-apple-darwin/release/splitter
+          VER="${GITHUB_REF_NAME#v}"
+          APP="dist/Splitter.app"
+
+          # 1. Construct the .app bundle around the cargo-built binary.
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "$BIN" "$APP/Contents/MacOS/splitter"
+          chmod +x "$APP/Contents/MacOS/splitter"
+
+          ICON_KEY=""
+          if [ -f dist/icon.icns ]; then
+            cp dist/icon.icns "$APP/Contents/Resources/icon.icns"
+            ICON_KEY="<key>CFBundleIconFile</key><string>icon</string>"
+          fi
+
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>splitter</string>
+            <key>CFBundleIdentifier</key><string>com.splitter.app</string>
+            <key>CFBundleName</key><string>Splitter</string>
+            <key>CFBundleDisplayName</key><string>Splitter</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$VER</string>
+            <key>CFBundleVersion</key><string>$VER</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            $ICON_KEY
+          </dict></plist>
+          EOF
+
+          # 2. Re-sign the .app (sign nested binary first via --deep).
+          codesign --force --options runtime --timestamp \
+            --entitlements .github/macos-entitlements.plist \
+            --sign "$SIGNING_IDENTITY" \
+            --deep "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+          # 3. Stage and create .dmg.
+          mkdir -p dmg-staging
+          cp -R "$APP" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "Splitter" -srcfolder dmg-staging \
+            -ov -format UDZO dist/splitter-macos-arm64.dmg
+          codesign --force --timestamp --sign "$SIGNING_IDENTITY" \
+            dist/splitter-macos-arm64.dmg
+
+          # 4. Notarize the DMG (covers the binary inside via hash) and staple.
+          P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
+          echo "$APP_STORE_KEY" | base64 --decode > "$P8"
+
+          xcrun notarytool submit dist/splitter-macos-arm64.dmg \
+            --key "$P8" \
+            --key-id "$APP_STORE_KEY_ID" \
+            --issuer "$APP_STORE_ISSUER_ID" \
+            --wait
+          xcrun stapler staple dist/splitter-macos-arm64.dmg
+          xcrun stapler validate dist/splitter-macos-arm64.dmg
+
+          shasum -a 256 dist/splitter-macos-arm64.dmg \
+            > dist/splitter-macos-arm64.dmg.sha256
+
+      - name: Clean up keychain
+        if: always() && env.HAVE_MAC_SECRETS == 'true'
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
+      - name: Upload artifact
+        if: env.HAVE_MAC_SECRETS == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: splitter-macos-arm64
+          path: |
+            dist/splitter-macos-arm64.dmg
+            dist/splitter-macos-arm64.dmg.sha256
+
+  build-windows:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-windows-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # ── Generate crates/app/assets/icon.ico from icon.png (ImageMagick is
+      # preinstalled on windows-latest as `magick`). No-op if PNG missing;
+      # build.rs already handles that case with a cargo:warning.
+      - name: Generate Windows .ico
+        shell: pwsh
+        run: |
+          if (Test-Path crates/app/assets/icon.png) {
+            magick crates/app/assets/icon.png -define icon:auto-resize=16,24,32,48,64,128,256 crates/app/assets/icon.ico
+          } else {
+            Write-Host "::warning::crates/app/assets/icon.png not found — .exe will ship without an embedded icon."
+          }
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Copy WebView2Loader.dll
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "target\release\build\webview2-com-sys-*\out\x64\WebView2Loader.dll" | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName "target\release\WebView2Loader.dll" -Force }
+          else { Write-Error "WebView2Loader.dll not found in build output" }
+
+      # ── Windows code signing ───────────────────────────────────────────────
+      # Both the application binary and the installer get signed, in that
+      # order: Inno Setup embeds whatever splitter.exe it finds, so signing
+      # after packaging would leave an unsigned binary inside a signed
+      # installer — SmartScreen and enterprise policies both object to that.
+      #
+      # Unconfigured repos still build; the .exe just ships unsigned and
+      # SmartScreen warns on download. Set all six secrets to enable.
+      - name: Check Windows signing secrets
+        id: winsign
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          TS_ENDPOINT:         ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT:          ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TS_CERT_PROFILE:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+        run: |
+          $names = @('AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET',
+                     'TS_ENDPOINT','TS_ACCOUNT','TS_CERT_PROFILE')
+          $missing = $names | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
+          if ($missing.Count -eq 0) {
+            "have=true" | Out-File -Append $env:GITHUB_OUTPUT
+            Write-Host "All Windows signing secrets present."
+          } elseif ($missing.Count -eq $names.Count) {
+            "have=false" | Out-File -Append $env:GITHUB_OUTPUT
+            Write-Host "::warning::No Windows signing secrets configured — the .exe will ship unsigned and SmartScreen will warn on download."
+          } else {
+            Write-Host "::error::Incomplete Windows signing configuration. Missing: $($missing -join ', ')"
+            Write-Host "Set all six, or none at all to skip signing."
+            exit 1
+          }
+
+      - name: Sign application binary
+        if: steps.winsign.outputs.have == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+          files-folder: target\release
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { Write-Error "ISCC.exe not found" }
+          $version = "${{ needs.prepare.outputs.tag || github.ref_name }}".TrimStart("v")
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          & $iscc /DMyAppVersion=$version installer\installer.iss
+
+      - name: Sign installer
+        if: steps.winsign.outputs.have == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name:     ${{ secrets.TRUSTED_SIGNING_CERT_PROFILE }}
+          files-folder: dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Signing rewrites the file, so the checksum has to be taken afterwards —
+      # otherwise it describes a binary nobody downloads.
+      - name: Checksum installer
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\splitter-setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  splitter-setup.exe" | Out-File "dist\splitter-setup.exe.sha256" -Encoding ASCII
+          Write-Host "Installer: dist\splitter-setup.exe ($([math]::Round((Get-Item dist\splitter-setup.exe).Length/1MB,1)) MB)"
+
+      # Signing provider: the steps above use Azure Trusted Signing. SignPath
+      # Foundation is the free alternative for open-source projects, but it
+      # requires an established user base — worth re-applying once these tools
+      # have traction. Whatever the provider, keep the order: sign the binary
+      # before packaging, sign the installer after, checksum last.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splitter-windows
+          path: |
+            dist\splitter-setup.exe
+            dist\splitter-setup.exe.sha256
+
+  build-linux:
+    needs: [prepare]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+
+    # x86_64 only — cross-compiling GTK/WebKit for ARM64 Linux requires a full
+    # ARM64 sysroot which is impractical on ubuntu-latest runners.
+    # macOS Apple Silicon users are covered by the build-mac job (aarch64-apple-darwin).
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-linux-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libasound2-dev \
+            pkg-config
+
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Package tar.gz
+        run: |
+          NAME="splitter-linux-x86_64"
+          DIST="dist/$NAME"
+          mkdir -p "$DIST"
+          cp target/x86_64-unknown-linux-gnu/release/splitter "$DIST/"
+          cp scripts/setup-linux.sh "$DIST/"
+          cp README.md "$DIST/" 2>/dev/null || true
+          chmod +x "$DIST/setup-linux.sh"
+          # Bundle the icon so setup-linux.sh can register it with the
+          # hicolor theme and the .desktop entry shows branding instead
+          # of the generic terminal glyph. No-op if PNG is missing.
+          if [ -f crates/app/assets/icon.png ]; then
+            cp crates/app/assets/icon.png "$DIST/icon.png"
+          else
+            echo "::warning::crates/app/assets/icon.png not found — Linux tarball will ship without an icon."
+          fi
+          tar -czf "$NAME.tar.gz" -C dist "$NAME"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          echo "Package: $NAME.tar.gz ($(du -sh "$NAME.tar.gz" | cut -f1))"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splitter-linux-x86_64
+          path: |
+            splitter-linux-x86_64.tar.gz
+            splitter-linux-x86_64.tar.gz.sha256
+
+  release:
+    needs: [prepare, build-mac, build-windows, build-linux]
+    # Publish whatever built: one platform failing must not withhold the
+    # others. A run with no artifacts at all is caught below.
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Every build failed: a release with no downloads is worse than a red
+      # run, so stop rather than publishing an empty tag.
+      - name: Require at least one artifact
+        run: |
+          set -euo pipefail
+          count=$(find artifacts -type f | wc -l | tr -d ' ')
+          echo "Artifacts staged: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No platform artifacts were produced — nothing to release."
+            exit 1
+          fi
+
+      - name: Flatten artifacts + generate latest.json
+        env:
+          REPO: ${{ github.repository }}
+          DL_BASE: ${{ vars.DOWNLOAD_BASE_URL }}
+          TAG:  ${{ needs.prepare.outputs.tag || github.ref_name }}
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+          VER="${TAG#v}"
+          # Versioned, immutable URLs — the same paths the publish step below
+          # rsyncs to. Override with the DOWNLOAD_BASE_URL repo variable if the
+          # download host ever moves.
+          BASE="${DL_BASE:-https://mayorana.ch/downloads/splitter}"
+          BASE="${BASE%/}/$TAG"
+          MAC_DMG="splitter-macos-arm64.dmg"
+          WIN_EXE="splitter-setup.exe"
+          LINUX_TGZ="splitter-linux-x86_64.tar.gz"
+
+          sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
+
+          cat > release/latest.json <<EOF
+          {
+            "name": "splitter",
+            "version": "$VER",
+            "tag": "$TAG",
+            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "macos":   { "dmg":    { "url": "$BASE/$MAC_DMG",   "sha256": "$(sha "$MAC_DMG")"   } },
+              "windows": { "exe_or_msi": { "url": "$BASE/$WIN_EXE", "sha256": "$(sha "$WIN_EXE")" } },
+              "linux":   { "tarball": { "url": "$BASE/$LINUX_TGZ", "sha256": "$(sha "$LINUX_TGZ")" } }
+            }
+          }
+          EOF
+          cat release/latest.json
+      # ── Publish the signed artifacts to mayorana.ch ────────────────────────
+      # The binaries are the product and no longer ride on the public GitHub
+      # Release. nginx on the VPS serves them straight off disk from
+      #   /var/www/mayorana-downloads/splitter/{<tag>,latest}/
+      #
+      # `latest/` is synced with --delete so it always matches exactly this
+      # release: when a platform fails to build, its download 404s instead of
+      # quietly serving the previous version under this version's checksum.
+      #
+      # No mkdir over ssh: the deploy key is confined with rrsync and gets no
+      # shell. rsync creates the final path component, and <root>/splitter
+      # already exists on the server.
+      #
+      # Unset secrets = skip with a warning, so a fork or an unconfigured
+      # checkout still gets a green pipeline and downloadable Actions artifacts.
+      - name: Publish artifacts to mayorana.ch
+        env:
+          SSH_KEY:   ${{ secrets.DIST_SSH_KEY }}
+          SSH_HOST:  ${{ secrets.DIST_SSH_HOST }}
+          SSH_USER:  ${{ secrets.DIST_SSH_USER }}
+          SSH_KNOWN: ${{ secrets.DIST_SSH_KNOWN_HOSTS }}
+          DEST_ROOT: ${{ vars.DIST_DEST_ROOT }}
+          OWNER:     ${{ github.repository_owner }}
+          TAG:       ${{ needs.prepare.outputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # A fork with no deploy secrets should still get a green pipeline.
+          # This repository must not: a release that publishes nothing while
+          # reporting success is how ais-monitor, ais-analytics and ais-tracing
+          # each shipped a version whose binaries existed nowhere a user could
+          # reach — off GitHub by then, and never rsynced here. The only signal
+          # was a warning, and the run was green.
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${SSH_HOST:-}" ] || [ -z "${SSH_USER:-}" ]; then
+            if [ "$(echo "${OWNER:-}" | tr 'A-Z' 'a-z')" != "bennekrouf" ]; then
+              echo "::warning::DIST_SSH_* not set — skipping publish on fork '${OWNER:-unknown}'."
+              echo "Artifacts remain downloadable from this run only."
+              exit 0
+            fi
+            echo "::error::DIST_SSH_KEY/HOST/USER are not set — refusing to finish a release that publishes nothing."
+            echo "Set them under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+
+          ROOT="${DEST_ROOT:-}/splitter"
+
+          install -m 700 -d ~/.ssh
+          trap 'rm -f ~/.ssh/dist_key' EXIT
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/dist_key
+          chmod 600 ~/.ssh/dist_key
+
+          if [ -n "${SSH_KNOWN:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN" > ~/.ssh/known_hosts
+          else
+            echo "::warning::DIST_SSH_KNOWN_HOSTS unset — accepting the host key unverified."
+            ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          SSH="ssh -i $HOME/.ssh/dist_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          # Versioned copy first: if the latest/ sync then fails, the release
+          # is still fetchable at its immutable URL.
+          rsync -av --chmod=F644 -e "$SSH" release/ "$SSH_USER@$SSH_HOST:$ROOT/$TAG/"
+          rsync -av --delete --chmod=F644 -e "$SSH" release/ "$SSH_USER@$SSH_HOST:$ROOT/latest/"
+
+          echo "Published $TAG → $SSH_HOST:$ROOT/{$TAG,latest}/"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare.outputs.tag || github.ref_name }}"
+
+          # Collect all release files
+
+          gh release create "$TAG" \
+            --title "Splitter $TAG" \
+            --notes "$(cat <<'EOF'
+          ## Download
+
+          ### macOS (Apple Silicon)
+          Download `splitter-macos-arm64.dmg`, open it, and drag Splitter to /Applications.
+          Signed with Apple Developer ID and notarized — opens with a normal double-click.
+          (Only shipped once the macOS signing secrets are configured — see the workflow.)
+
+          ### Windows
+          Download `splitter-setup.exe` and run it — the installer handles everything.
+
+          ### Linux (x86_64)
+          ```bash
+          curl -L https://mayorana.ch/downloads/splitter/${{ needs.prepare.outputs.tag || github.ref_name }}/splitter-linux-x86_64.tar.gz | tar xz
+          cd splitter-linux-x86_64
+          sudo ./setup-linux.sh && ./splitter
+          ```
+
+          > **Linux runtime requirements**: `libwebkit2gtk-4.1` and ALSA (both installed by `setup-linux.sh`).
+          EOF
+          )" \
+            release/latest.json

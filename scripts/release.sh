@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# release.sh — cut a release locally or just bump the patch automatically
+#
+# The version lives in the workspace Cargo.toml ([workspace.package]); every
+# crate inherits it, so this is the one line to bump.
+#
+# After pushing the tag, GitHub Actions (if configured) can build/publish
+# the release. Adjust the "In ~N min" links below once CI is set up.
+#
+# Usage:
+#   ./scripts/release.sh            # auto-bump patch (0.3.1 → 0.3.2), show plan, confirm
+#   ./scripts/release.sh 0.4.0      # explicit version
+#   ./scripts/release.sh --minor    # bump minor  (0.3.1 → 0.4.0)
+#   ./scripts/release.sh --major    # bump major  (0.3.1 → 1.0.0)
+#   ./scripts/release.sh --dry-run  # show what would happen, don't do it
+
+set -euo pipefail
+
+CARGO="Cargo.toml"
+FORMULA="${FORMULA_PATH:-$HOME/code/homebrew-splitter/Formula/splitter.rb}"
+DRY_RUN=false
+
+CARGO_VERSION=$(grep '^version' "$CARGO" | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+# Base the bump on the highest tag ever pushed, not on Cargo.toml's version on
+# this branch — a release cut from a branch that never merged back to master
+# (or any divergent history) leaves Cargo.toml stale here, and bumping off it
+# recomputes a tag that already exists elsewhere.
+LATEST_TAG=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tail -1)
+CURRENT="${LATEST_TAG:-$CARGO_VERSION}"
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+# ── Compute target version ────────────────────────────────────────────────────
+case "${1:-}" in
+    --dry-run)            DRY_RUN=true; NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+    --patch|"")           NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+    --minor)              NEW="$MAJOR.$((MINOR + 1)).0" ;;
+    --major)              NEW="$((MAJOR + 1)).0.0" ;;
+    [0-9]*.[0-9]*.[0-9]*) NEW="$1" ;;
+    *)
+        echo "Usage: $0 [--patch|--minor|--major|--dry-run|<version>]"
+        exit 1
+        ;;
+esac
+
+TAG="v$NEW"
+
+# ── Pre-flight checks ─────────────────────────────────────────────────────────
+ERRORS=()
+
+if [[ ! "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ERRORS+=("Version must be semver (e.g. 1.2.3), got: $NEW")
+fi
+
+if git rev-parse "$TAG" &>/dev/null; then
+    ERRORS+=("Tag $TAG already exists")
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+    ERRORS+=("Working tree is dirty — commit or stash first")
+fi
+
+if [[ ${#ERRORS[@]} -gt 0 ]]; then
+    for e in "${ERRORS[@]}"; do echo "❌ $e"; done
+    exit 1
+fi
+
+# ── Show release plan ─────────────────────────────────────────────────────────
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Release plan"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Cargo.toml   : $CARGO_VERSION → $NEW"
+if [[ "$CARGO_VERSION" != "$CURRENT" ]]; then
+    echo "  drift          : Cargo.toml was behind tag v$CURRENT — bumping from the tag"
+fi
+if [[ -f "$FORMULA" ]]; then
+    FORMULA_VER=$(grep 'version "' "$FORMULA" | head -1 | sed 's/.*version "\(.*\)".*/\1/')
+    echo "  Homebrew tap : $FORMULA_VER → $NEW  (CI updates sha256 automatically)"
+fi
+echo "  Git tag      : $TAG"
+echo "  Branch       : $(git branch --show-current)"
+echo ""
+
+# Changelog since last tag
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+if [[ -n "$LAST_TAG" ]]; then
+    COUNT=$(git log "$LAST_TAG"..HEAD --oneline | wc -l | tr -d ' ')
+    echo "  Commits since $LAST_TAG: $COUNT"
+    git log "$LAST_TAG"..HEAD --oneline --no-decorate | sed 's/^/    /'
+else
+    echo "  (no previous tag — first release)"
+fi
+echo ""
+
+$DRY_RUN && { echo "Dry run — nothing done."; exit 0; }
+
+if [[ -t 0 ]]; then
+    read -r -p "Proceed? [y/N] " CONFIRM
+    [[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+else
+    echo "No TTY on stdin — proceeding without confirmation."
+fi
+
+# ── Bump + commit + tag ───────────────────────────────────────────────────────
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "s/^version = \"$CARGO_VERSION\"/version = \"$NEW\"/" "$CARGO"
+else
+    sed -i    "s/^version = \"$CARGO_VERSION\"/version = \"$NEW\"/" "$CARGO"
+fi
+
+# A tag whose commit does not carry the bump is how this repo ended up with
+# releases pointing at a stale version. Fail loudly instead.
+if ! grep -q "^version = \"$NEW\"" "$CARGO"; then
+    echo "❌ Failed to bump Cargo.toml version ($CARGO_VERSION → $NEW) — aborting before commit/tag."
+    exit 1
+fi
+
+# Refresh Cargo.lock so its recorded version matches the bump, and commit it
+# with the manifest — otherwise CI's `cargo test --locked` fails on master
+# for every release.
+cargo metadata --format-version 1 --quiet >/dev/null
+
+git add "$CARGO" Cargo.lock
+git commit -m "chore: release $TAG"
+git tag "$TAG"
+
+# ── Push ─────────────────────────────────────────────────────────────────────
+git push origin HEAD
+git push origin "$TAG"
+
+echo ""
+echo "🚀  $TAG pushed"
+echo "    https://github.com/bennekrouf/splitter/releases/tag/$TAG"

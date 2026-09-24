@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Splitter app icon.
+  Same family as the ais-* apps and GitAgent: squircle ground, white glowing
+  mark, one hue per app. Splitter's hue is teal, which no sibling uses.
+
+  The mark is the app in one picture: a waveform whose bars stop either side
+  of a cut, with the split marker's head at the top of the cut line, the
+  way a split shows in the editor (a flag tab on the line). Bars are few and thick so it still reads
+  at 16x16. Designed at 1024.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#1FB5A8"/>
+      <stop offset="55%"  stop-color="#12877F"/>
+      <stop offset="100%" stop-color="#0A4A4A"/>
+    </linearGradient>
+    <!-- White with a hint of teal at the far edge -->
+    <!-- User-space coordinates: a gradient in bounding-box units has nothing to
+         span on a zero-width vertical line, and the stroke would vanish. -->
+    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="824" y2="0">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#D8FFF9"/>
+    </linearGradient>
+    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Squircle background -->
+  <rect x="64" y="64" width="896" height="896" rx="224" ry="224" fill="url(#bg)"/>
+
+  <!-- Waveform: three bars each side of the cut, centred on y = 512 -->
+  <g filter="url(#glow)" stroke="url(#mark)" stroke-width="56" stroke-linecap="round" fill="none">
+    <line x1="232" y1="432" x2="232" y2="592"/>
+    <line x1="322" y1="322" x2="322" y2="702"/>
+    <line x1="412" y1="392" x2="412" y2="632"/>
+    <line x1="612" y1="352" x2="612" y2="672"/>
+    <line x1="702" y1="282" x2="702" y2="742"/>
+    <line x1="792" y1="422" x2="792" y2="602"/>
+  </g>
+
+  <!-- The cut: a thin line through the gap, with the split marker's flag
+       tab at its head, as in the editor -->
+  <g filter="url(#glow)" fill="#FFFFFF">
+    <rect x="503" y="214" width="18" height="604" rx="9"/>
+    <rect x="503" y="214" width="112" height="84" rx="18"/>
+  </g>
+</svg>

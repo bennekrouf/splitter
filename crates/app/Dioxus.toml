@@ -1,0 +1,10 @@
+[application]
+name = "splitter"
+default_platform = "desktop"
+
+[desktop]
+title = "Splitter"
+
+[bundle]
+identifier = "com.splitter.app"
+icon = ["assets/icon.png"]

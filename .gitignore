@@ -1,2 +1,7 @@
 /target
 /testdata
+# Release build outputs (see .github/workflows/release.yml)
+/dist
+/dmg-staging
+# Generated from icon.png at build time
+/crates/app/assets/icon.ico
