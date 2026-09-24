@@ -18,6 +18,18 @@ cargo run -p splitter -- path/to/folder
 
 Or start without an argument and use **Open folder…** (⌘O).
 
+### From a YouTube link
+
+**URL…** (⌘U) downloads a video's audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp), converts it
+to WAV and opens it from `~/Music/Splitter/Downloads`. Both tools must be installed:
+
+```bash
+brew install yt-dlp ffmpeg
+```
+
+YouTube changes often; when downloads start failing, `brew upgrade yt-dlp` is almost always the fix.
+The download test needs the network: `cargo test -p splitter -- --ignored download`.
+
 Generate a 60-minute test recording (tracks separated by 2 s gaps):
 
 ```bash

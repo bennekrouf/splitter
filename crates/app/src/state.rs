@@ -67,6 +67,10 @@ pub struct App {
     pub loudness: Signal<HashMap<PathBuf, Arc<LoudnessMap>>>,
     pub ab: Signal<crate::ab::AbState>,
     pub ab_rx: Signal<Option<crossbeam_channel::Receiver<crate::ab::AbResult>>>,
+    /// Text of the "Open URL" dialog while it's open.
+    pub url_dialog: Signal<Option<String>>,
+    /// The yt-dlp download in progress, if any.
+    pub download: Signal<Option<crate::download::Download>>,
     /// When the current error message was first shown (they fade after a while).
     error_since: Signal<Option<Instant>>,
 }
@@ -100,6 +104,8 @@ impl App {
             loudness: Signal::new(HashMap::new()),
             ab: Signal::new(Default::default()),
             ab_rx: Signal::new(None),
+            url_dialog: Signal::new(None),
+            download: Signal::new(None),
             error_since: Signal::new(None),
         }
     }
@@ -361,6 +367,7 @@ impl App {
         self.poll_export();
         self.fade_error();
         self.poll_ab();
+        self.poll_download();
         if self.cut_dirty.peek().is_some_and(|t| t.elapsed() > Duration::from_millis(400)) {
             self.save_now();
         }

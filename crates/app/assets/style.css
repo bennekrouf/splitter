@@ -324,6 +324,17 @@ button:disabled { opacity: 0.45; }
   -webkit-user-select: text;
 }
 .modal textarea:focus { outline: none; border-color: var(--accent); }
+.modal input.url {
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.modal input.url:focus { outline: none; border-color: var(--accent); }
 .match.ok { color: var(--ok); }
 .match.todo { color: var(--todo); }
 .preview { margin: 0; padding-left: 22px; max-height: 150px; overflow-y: auto; color: var(--text); }
@@ -362,3 +373,11 @@ select.profile {
 /* Sidebar footer: batch export */
 .sidebar-foot { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .sidebar-foot button.primary { width: 100%; }
+
+/* URL download */
+.head-actions { display: flex; gap: 6px; }
+.download { padding: 8px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.download-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.download .progress { margin: 0; width: 100%; }
+.progress.indeterminate > div { animation: pulse 1.2s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: 0.25; } to { opacity: 0.8; } }

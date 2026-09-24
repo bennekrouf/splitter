@@ -1,4 +1,5 @@
 use crate::ab::AbState;
+use crate::download::Phase;
 use crate::exporting::source_facts;
 use crate::exporting::ExportStatus;
 use crate::state::{self, key_of, ScanState};
@@ -43,7 +44,7 @@ pub fn App() -> Element {
     });
 
     let onkeydown = move |e: KeyboardEvent| {
-        if app.paste.peek().is_some() || app.editing_title.peek().is_some() {
+        if app.paste.peek().is_some() || app.editing_title.peek().is_some() || app.url_dialog.peek().is_some() {
             return; // a text field has the keyboard
         }
         let m = e.modifiers();
@@ -96,6 +97,10 @@ pub fn App() -> Element {
             }
             Code::KeyO if cmd => {
                 open_folder(app);
+                true
+            }
+            Code::KeyU if cmd => {
+                app.ask_url();
                 true
             }
             // Split review
@@ -197,6 +202,7 @@ pub fn App() -> Element {
             },
             Sidebar {}
             main { class: "main", Editor {} }
+            UrlDialog {}
         }
     }
 }
@@ -242,8 +248,17 @@ fn Sidebar() -> Element {
         aside { class: "sidebar",
             div { class: "sidebar-head",
                 span { class: "brand", "Splitter" }
-                button { onclick: move |_| open_folder(app), "Open folder…" }
+                div { class: "head-actions",
+                    button { title: "Open a folder of recordings (⌘O)", onclick: move |_| open_folder(app), "Open folder…" }
+                    button {
+                        title: "Download a YouTube video's audio and open it (⌘U)",
+                        disabled: app.download.read().is_some(),
+                        onclick: move |_| app.ask_url(),
+                        "URL…"
+                    }
+                }
             }
+            DownloadStatus {}
             if let Some(name) = folder {
                 div { class: "folder", title: "{name}", "{name}" }
             }
@@ -295,7 +310,7 @@ fn Sidebar() -> Element {
                 }
             }
             if recordings.is_empty() {
-                div { class: "hint", "Open a folder containing MP3 or WAV recordings (⌘O)." }
+                div { class: "hint", "Open a folder containing MP3 or WAV recordings (⌘O), or a YouTube link (⌘U)." }
             }
             div { class: "sidebar-foot",
                 if active > 0 {
@@ -331,7 +346,10 @@ fn Editor() -> Element {
     let app = use_context::<state::App>();
     let recordings = app.recordings.read();
     let Some(i) = (app.selected)() else {
-        return rsx! { div { class: "empty", "No recording selected." } };
+        return rsx! {
+            div { class: "empty", "No recording selected." }
+            ErrorBanner {}
+        };
     };
     let Some(rec) = recordings.get(i) else { return rsx! {} };
     let scans = app.scans.read();
@@ -358,22 +376,110 @@ fn Editor() -> Element {
         },
         None => rsx! { div { class: "empty", "Waiting to analyse…" } },
     };
-    let error = app.error.read().clone();
 
     rsx! {
         h1 { class: "title", "{rec.name()}" }
         {body}
-        if let Some(err) = error {
-            div {
-                class: "error",
-                onclick: move |_| {
-                    let mut e = app.error;
-                    e.set(None);
-                },
-                "{err}"
+        ErrorBanner {}
+        Keys {}
+    }
+}
+
+#[component]
+fn ErrorBanner() -> Element {
+    let app = use_context::<state::App>();
+    let Some(err) = app.error.read().clone() else { return rsx! {} };
+    rsx! {
+        div {
+            class: "error",
+            onclick: move |_| {
+                let mut e = app.error;
+                e.set(None);
+            },
+            "{err}"
+        }
+    }
+}
+
+/// Progress of the URL download, under the sidebar header.
+#[component]
+fn DownloadStatus() -> Element {
+    let app = use_context::<state::App>();
+    let Some(phase) = app.download.read().as_ref().map(|d| d.phase) else { return rsx! {} };
+    let (label, frac) = match phase {
+        Phase::Starting => ("Fetching video info…".to_string(), None),
+        Phase::Downloading(Some(p)) => (format!("Downloading… {}%", (p * 100.0) as u32), Some(p)),
+        Phase::Downloading(None) => ("Downloading…".to_string(), None),
+        Phase::Converting => ("Converting to WAV…".to_string(), None),
+    };
+    rsx! {
+        div { class: "download",
+            div { class: "download-row",
+                span { class: "dim", "{label}" }
+                button { onclick: move |_| app.cancel_download(), "Cancel" }
+            }
+            div { class: if frac.is_none() { "progress indeterminate" } else { "progress" },
+                div { style: "width: {frac.unwrap_or(1.0) * 100.0}%" }
             }
         }
-        Keys {}
+    }
+}
+
+/// ⌘U: paste a YouTube link to download its audio.
+#[component]
+fn UrlDialog() -> Element {
+    let app = use_context::<state::App>();
+    let Some(text) = (app.url_dialog)() else { return rsx! {} };
+    let mut dialog = app.url_dialog;
+    let close = move || {
+        let mut dialog = app.url_dialog;
+        dialog.set(None);
+        app.focus_root();
+    };
+    let go = move || {
+        if let Some(url) = app.url_dialog.peek().clone() {
+            close();
+            app.start_download(&url);
+        }
+    };
+    let dir = crate::download::downloads_dir();
+
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| close(),
+            div { class: "modal", onclick: move |e| e.stop_propagation(),
+                h2 { "Open from URL" }
+                p { class: "dim",
+                    "The audio is downloaded with yt-dlp, converted to WAV and saved in {dir.display()}. "
+                    "Works with YouTube and most other video sites."
+                }
+                input {
+                    class: "url",
+                    // Uncontrolled: binding `value` makes fast typing drop characters on re-render.
+                    r#type: "url",
+                    placeholder: "https://www.youtube.com/watch?v=…",
+                    spellcheck: "false",
+                    onmounted: move |e| async move {
+                        let _ = e.set_focus(true).await;
+                    },
+                    oninput: move |e| dialog.set(Some(e.value())),
+                    onkeydown: move |e| {
+                        e.stop_propagation();
+                        match e.key() {
+                            Key::Escape => close(),
+                            Key::Enter => go(),
+                            _ => {}
+                        }
+                    },
+                }
+                div { class: "modal-actions",
+                    button { onclick: move |_| close(), "Cancel" }
+                    button { class: "primary", disabled: text.trim().is_empty(), onclick: move |_| go(),
+                        "Download"
+                        kbd { "Enter" }
+                    }
+                }
+            }
+        }
     }
 }
 
