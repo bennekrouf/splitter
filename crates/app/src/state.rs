@@ -88,6 +88,8 @@ pub struct App {
     pub url_dialog: Signal<Option<String>>,
     /// The yt-dlp download in progress, if any.
     pub download: Signal<Option<crate::download::Download>>,
+    /// The last download's output, kept after it ends until closed.
+    pub download_log: Signal<Option<crate::download::DownloadLog>>,
     /// When the current error message was first shown (they fade after a while).
     error_since: Signal<Option<Instant>>,
 }
@@ -131,6 +133,7 @@ impl App {
             ab_rx: Signal::new(None),
             url_dialog: Signal::new(None),
             download: Signal::new(None),
+            download_log: Signal::new(None),
             error_since: Signal::new(None),
         }
     }

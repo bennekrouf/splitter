@@ -1,7 +1,8 @@
 //! Video preview: a video file's picture in place of the overview waveform, following the
 //! audio player.
 //!
-//! The web view plays the file muted from the local media server. The audio stays on the
+//! The web view plays the file muted from the local media server (or through the app's own
+//! protocol, if it won't load from 127.0.0.1). The audio stays on the
 //! player (sample-accurate, with A/B, loops and preview cuts), and the picture is steered to
 //! its playhead: the exact frame while paused; while playing, a jump when the playhead jumps or
 //! the picture drifts off.
@@ -9,6 +10,7 @@
 use crate::media_server;
 use crate::state::App;
 use crate::video_export::Timeline;
+use dioxus::desktop::use_asset_handler;
 use dioxus::prelude::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -82,6 +84,11 @@ pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
         }
     });
     let mut failed = use_signal(|| false);
+    // Loading through the app's own protocol, after the web view refused 127.0.0.1.
+    let mut in_app = use_signal(|| false);
+    use_asset_handler("media", move |request, responder| {
+        std::thread::spawn(move || responder.respond(media_server::in_app_response(&request)));
+    });
     // Bumped when the video's metadata loads: only then can it be positioned.
     let mut loads = use_signal(|| 0u32);
     let sent = use_hook(|| Rc::new(RefCell::new(Sent { secs: -1.0, playing: false, at: Instant::now(), loads: 0 })));
@@ -116,11 +123,12 @@ pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
             }
         };
     };
+    let src = if in_app() { media_server::in_app_path(&url) } else { url };
     rsx! {
         div { class: "video-preview",
             video {
                 id: "video-preview",
-                src: "{url}",
+                src: "{src}",
                 muted: true,
                 playsinline: true,
                 preload: "auto",
@@ -128,7 +136,15 @@ pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
                     failed.set(false);
                     loads += 1;
                 },
-                onerror: move |_| failed.set(true),
+                onerror: move |_| {
+                    // Once through the app's own protocol before giving up: the web view may
+                    // refuse local addresses. A format it can't play fails there too.
+                    if in_app() {
+                        failed.set(true);
+                    } else {
+                        in_app.set(true);
+                    }
+                },
                 onclick: move |_| {
                     app.toggle();
                     app.focus_root();
