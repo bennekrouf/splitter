@@ -1,12 +1,14 @@
 use crate::ab::AbState;
 use crate::exporting::source_facts;
-use crate::state::{self, key_of, ExportState, ScanState};
+use crate::exporting::ExportStatus;
+use crate::state::{self, key_of, ScanState};
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
 use splitter_audio::{Bitrate, Scan};
 use splitter_core::edit::SplitState;
 use splitter_core::time::{fmt_precise, fmt_short};
-use splitter_core::export::{plan, Profile};
+use splitter_core::export::{plan, Normalize, Profile};
+use splitter_core::loudness::Loudness;
 use splitter_core::tracklist;
 use splitter_core::Status;
 use std::fmt::Write;
@@ -25,8 +27,13 @@ pub fn App() -> Element {
     let app = use_context_provider(state::App::new);
 
     use_hook(move || {
-        if let Some(arg) = std::env::args().nth(1) {
-            app.open(std::path::Path::new(&arg));
+        match std::env::args().nth(1) {
+            Some(arg) => app.open(std::path::Path::new(&arg)),
+            None => {
+                if let Some(dir) = state::prefs::last_folder() {
+                    app.open(&dir);
+                }
+            }
         }
     });
 
@@ -141,8 +148,16 @@ pub fn App() -> Element {
                 app.toggle_drop(None);
                 true
             }
+            Code::KeyE if cmd && m.shift() => {
+                app.export_done();
+                true
+            }
             Code::KeyE if cmd => {
                 app.export_current();
+                true
+            }
+            Code::KeyF if !cmd => {
+                app.toggle_flag();
                 true
             }
             Code::KeyA if !cmd => {
@@ -198,7 +213,24 @@ fn Sidebar() -> Element {
     let selected = (app.selected)();
     let scans = app.scans.read();
     let cutlist = app.cutlist.read();
+    let exports = app.exports.read();
     let folder = app.folder.read().as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned());
+    let active = exports.values().filter(|s| s.is_active()).count();
+    let done = recordings
+        .iter()
+        .filter(|r| cutlist.recordings.get(&key_of(&r.path)).is_some_and(|e| e.status == Status::Done))
+        .count();
+
+    // Keep the selected file visible, and show it in the window title.
+    use_effect(move || {
+        let i = (app.selected)();
+        let name = i.and_then(|i| app.recordings.peek().get(i).map(|r| r.name()));
+        dioxus::desktop::window().set_title(&match name {
+            Some(n) => format!("{n} — Splitter"),
+            None => "Splitter".into(),
+        });
+        document::eval("requestAnimationFrame(() => document.querySelector('.item.selected')?.scrollIntoView({block: 'nearest'}))");
+    });
 
     rsx! {
         aside { class: "sidebar",
@@ -221,6 +253,7 @@ fn Sidebar() -> Element {
                             Status::Todo => ("dot", "to do"),
                         };
                         let counts = edit.filter(|e| !e.splits.is_empty()).map(|e| e.counts());
+                        let export = exports.get(&key_of(&rec.path)).cloned();
                         rsx! {
                             div {
                                 key: "{rec.path.display()}",
@@ -228,10 +261,16 @@ fn Sidebar() -> Element {
                                 onclick: move |_| app.select(i),
                                 span { class: "{dot}", title: "{dot_title}" }
                                 span { class: "item-name", title: "{rec.name()}", "{rec.name()}" }
-                                match scans.get(&rec.path) {
-                                    Some(ScanState::Scanning(p)) => rsx! { span { class: "item-meta busy", "{(p * 100.0) as u32}%" } },
-                                    Some(ScanState::Failed(e)) => rsx! { span { class: "item-meta bad", title: "{e}", "error" } },
-                                    Some(ScanState::Ready(s)) => rsx! {
+                                match (export, scans.get(&rec.path)) {
+                                    (Some(ExportStatus::Queued), _) => rsx! { span { class: "item-meta busy", "queued" } },
+                                    (Some(ExportStatus::Measuring), _) => rsx! { span { class: "item-meta busy", "measuring…" } },
+                                    (Some(ExportStatus::Running { done, total }), _) => rsx! {
+                                        span { class: "item-meta busy", "exporting {done}/{total}" }
+                                    },
+                                    (Some(ExportStatus::Failed(e)), _) => rsx! { span { class: "item-meta bad", title: "{e}", "export failed" } },
+                                    (_, Some(ScanState::Scanning(p))) => rsx! { span { class: "item-meta busy", "{(p * 100.0) as u32}%" } },
+                                    (_, Some(ScanState::Failed(e))) => rsx! { span { class: "item-meta bad", title: "{e}", "error" } },
+                                    (_, Some(ScanState::Ready(s))) => rsx! {
                                         if let Some((ok, todo)) = counts {
                                             span {
                                                 class: if todo == 0 { "item-meta ok" } else { "item-meta todo" },
@@ -242,7 +281,7 @@ fn Sidebar() -> Element {
                                             span { class: "item-meta", "{fmt_short(s.info.duration_secs())}" }
                                         }
                                     },
-                                    None => rsx! { span { class: "item-meta", "…" } },
+                                    (_, None) => rsx! { span { class: "item-meta", "…" } },
                                 }
                             }
                         }
@@ -251,6 +290,21 @@ fn Sidebar() -> Element {
             }
             if recordings.is_empty() {
                 div { class: "hint", "Open a folder containing MP3 or WAV recordings (⌘O)." }
+            }
+            div { class: "sidebar-foot",
+                if active > 0 {
+                    span { class: "dim", "Exporting {active} file(s)…" }
+                    button { onclick: move |_| app.cancel_exports(), "Cancel" }
+                } else {
+                    button {
+                        class: "primary",
+                        disabled: done == 0,
+                        title: "Export every file marked done (⌘Enter marks one)",
+                        onclick: move |_| app.export_done(),
+                        "Export {done} done file(s)"
+                        kbd { "⇧⌘E" }
+                    }
+                }
             }
         }
     }
@@ -691,9 +745,13 @@ fn ExportBar(scan: ScanRef) -> Element {
     let planned = plan(edit, scan.0.info.total_samples, &stem, &cutlist.export);
     let count = planned.len();
     let dropped = edit.splits.len() + 1 - count;
-    let state = app.export.read().clone();
-    let running = matches!(state, ExportState::Running { .. });
+    let status = app.exports.read().get(&key).cloned();
+    let running = status.as_ref().is_some_and(|s| s.is_active());
     let profile = cutlist.export.profile;
+    let normalize = cutlist.export.normalize;
+    let norm_idx = Normalize::CHOICES.iter().position(|n| *n == normalize).unwrap_or(0);
+    let map = app.loudness.read().get(&path).cloned();
+    let set: Option<Loudness> = map.map(|m| m.ranges(&planned.iter().map(|t| (t.start, t.end)).collect::<Vec<_>>()));
     let info = &scan.0.info;
     let facts = source_facts(info, scan.0.mp3.is_some());
     let secs: f64 = planned.iter().map(|t| (t.end - t.start) as f64).sum::<f64>() / info.sample_rate as f64;
@@ -738,22 +796,56 @@ fn ExportBar(scan: ScanRef) -> Element {
                 "A/B"
                 kbd { "A" }
             }
+            select {
+                class: "profile",
+                title: if profile == Profile::Original {
+                    "A byte copy can't change level; tracks get ReplayGain tags instead"
+                } else {
+                    "Loudness adjustment (never pushes true peak above -1 dBTP)"
+                },
+                disabled: profile == Profile::Original,
+                value: "{norm_idx}",
+                onchange: move |e| {
+                    if let Some(n) = e.value().parse::<usize>().ok().and_then(|i| Normalize::CHOICES.get(i)) {
+                        app.set_normalize(*n);
+                    }
+                    app.focus_root();
+                },
+                for (i, n) in Normalize::CHOICES.iter().enumerate() {
+                    option { key: "{i}", value: "{i}", selected: i == norm_idx, "{n.label()}" }
+                }
+            }
             span { class: "dim",
                 "{count} tracks · ≈ {size}"
                 if dropped > 0 { " · {dropped} left out" }
                 " → {stem}/*.{ext}"
             }
+            match set {
+                Some(Loudness { lufs: Some(l), peak_db }) => rsx! {
+                    span {
+                        class: if peak_db > -1.0 { "loud hot" } else { "loud" },
+                        title: "Integrated loudness and true peak of the tracks being exported",
+                        "{l:.1} LUFS · peak {peak_db:.1} dBTP"
+                    }
+                },
+                Some(_) => rsx! {},
+                None => rsx! { span { class: "dim", "measuring loudness…" } },
+            }
             span { class: "spacer" }
-            match state {
-                ExportState::Running { key: k, done, total } if k == key => rsx! {
+            match status {
+                Some(ExportStatus::Queued) => rsx! { span { class: "dim", "Queued…" } },
+                Some(ExportStatus::Measuring) => rsx! { span { class: "dim", "Measuring loudness…" } },
+                Some(ExportStatus::Running { done, total }) => rsx! {
                     span { class: "dim", "Exporting {done}/{total}…" }
                     div { class: "progress small", div { style: "width: {done as f64 / total.max(1) as f64 * 100.0}%" } }
                 },
-                ExportState::Finished { key: k, dir, count } if k == key => rsx! {
+                Some(ExportStatus::Finished { dir, count }) => rsx! {
                     span { class: "ok", "✓ Exported {count} tracks" }
                     button { onclick: move |_| app.reveal_export(&dir), "Show in Finder" }
                 },
-                _ => rsx! {},
+                Some(ExportStatus::Cancelled) => rsx! { span { class: "dim", "Export cancelled" } },
+                Some(ExportStatus::Failed(e)) => rsx! { span { class: "bad", title: "{e}", "Export failed" } },
+                None => rsx! {},
             }
             button {
                 class: "primary",
@@ -847,6 +939,7 @@ fn TrackList(scan: ScanRef) -> Element {
     let tracks: Vec<_> = edit.tracks(total).into_iter().map(|t| (t.index, t.start, t.end, t.meta.clone())).collect();
     let count = tracks.len();
     let current = current();
+    let map = app.selected_path().and_then(|p| app.loudness.read().get(&p).cloned());
 
     rsx! {
         div { class: "tracks",
@@ -890,6 +983,20 @@ fn TrackList(scan: ScanRef) -> Element {
                             }
                             span { class: "t", "{fmt_precise(a as f64 / rate)}" }
                             span { class: "len", "{fmt_short((b - a) as f64 / rate)}" }
+                            {
+                                match map.as_ref().map(|m| m.range(a, b)) {
+                                    Some(Loudness { lufs: Some(l), peak_db }) => rsx! {
+                                        span { class: "lufs", title: "Integrated loudness", "{l:.1}" }
+                                        span {
+                                            class: if peak_db > -1.0 { "peak hot" } else { "peak" },
+                                            title: "True peak (dBTP)",
+                                            "{peak_db:.1}"
+                                        }
+                                    },
+                                    Some(_) => rsx! { span { class: "lufs dim", "silent" } span { class: "peak" } },
+                                    None => rsx! { span { class: "lufs dim", "…" } span { class: "peak" } },
+                                }
+                            }
                             span { class: "{badge_class}", "{badge}" }
                             button {
                                 class: "drop-toggle",
@@ -1039,7 +1146,14 @@ fn Keys() -> Element {
         ("⌘Z", "undo"),
         ("⌘Enter", "file done"),
     ];
-    let tracks = [("T", "title"), ("X", "leave out / keep"), ("A", "A/B compare"), ("⌘E", "export")];
+    let tracks = [
+        ("T", "title"),
+        ("X", "leave out / keep"),
+        ("A", "A/B compare"),
+        ("F", "flag file"),
+        ("⌘E", "export"),
+        ("⇧⌘E", "export done files"),
+    ];
     let nav = [
         ("Space", "play / pause"),
         ("← →", "±5 s (⇧ 0.5 s, ⌥ 10 ms)"),

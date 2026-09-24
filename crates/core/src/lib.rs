@@ -5,6 +5,7 @@ pub mod cutlist;
 pub mod detect;
 pub mod edit;
 pub mod export;
+pub mod loudness;
 pub mod time;
 pub mod tracklist;
 

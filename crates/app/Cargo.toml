@@ -10,6 +10,7 @@ dioxus.workspace = true
 tokio.workspace = true
 rfd.workspace = true
 crossbeam-channel.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 symphonia.workspace = true

@@ -3,11 +3,16 @@
 //!
 //!     cargo run -p splitter --release --example export_cutlist -- testdata [--out DIR] [--verify]
 //!         [--profile original|mp3-v0|mp3-v2|mp3-v4|mp3-320|mp3-256|mp3-192|mp3-128|flac|wav16]
+//!         [--normalize track:-14|album:-16]
+//!
+//! Loudness is always measured, so tracks get ReplayGain tags; with `--verify` each exported
+//! track is measured again and its loudness printed.
 
 use splitter_audio::export::{export, ExportJob, Tags};
-use splitter_audio::scan::load_or_scan;
+use splitter_audio::loudness::{analyze, apply_to_jobs, load_or_analyze};
+use splitter_audio::scan::{self as scanning, load_or_scan};
 use splitter_core::cutlist::Cutlist;
-use splitter_core::export::{plan, Profile};
+use splitter_core::export::{plan, Normalize, Profile};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -17,6 +22,7 @@ fn main() {
     let mut out_root = None;
     let mut verify = false;
     let mut profile_arg: Option<Profile> = None;
+    let mut normalize_arg: Option<Normalize> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out_root = args.next().map(PathBuf::from),
@@ -32,6 +38,16 @@ fn main() {
                     n => panic!("unknown profile {n}"),
                 });
             }
+            "--normalize" => {
+                let v = args.next().expect("--normalize needs track:LUFS or album:LUFS");
+                let (mode, target) = v.split_once(':').expect("track:LUFS or album:LUFS");
+                let target: f32 = target.parse().expect("LUFS number");
+                normalize_arg = Some(match mode {
+                    "track" => Normalize::Track { target },
+                    "album" => Normalize::Album { target },
+                    m => panic!("unknown normalize mode {m}"),
+                });
+            }
             other => panic!("unknown argument {other}"),
         }
     }
@@ -39,8 +55,12 @@ fn main() {
     if let Some(p) = profile_arg {
         cutlist.export.profile = p;
     }
+    if let Some(n) = normalize_arg {
+        cutlist.export.normalize = n;
+    }
     let profile = cutlist.export.profile;
-    println!("profile: {}", profile.label());
+    let normalize = cutlist.export.normalize;
+    println!("profile: {} · {}", profile.label(), normalize.label());
     let mut failures = 0;
 
     for (name, edit) in &cutlist.recordings {
@@ -51,18 +71,24 @@ fn main() {
         let ext = profile.extension(&src_ext);
         let out = out_root.clone().unwrap_or_else(|| dir.clone()).join(&stem);
         let planned = plan(edit, scan.info.total_samples, &stem, &cutlist.export);
-        let jobs: Vec<ExportJob> = planned
+        let mut jobs: Vec<ExportJob> = planned
             .iter()
             .map(|t| ExportJob {
                 start: t.start,
                 end: t.end,
                 path: out.join(format!("{}.{ext}", t.stem)),
-                tags: Tags { title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total },
+                gain_db: 0.0,
+                tags: Tags { replaygain: None, title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total },
             })
             .collect();
 
         let t0 = Instant::now();
+        let map = load_or_analyze(&path, &scan, &mut |_| {}).expect("loudness");
+        let measured = t0.elapsed().as_secs_f64();
+        apply_to_jobs(&mut jobs, &map, normalize, profile != Profile::Original);
+        let t0 = Instant::now();
         export(&path, &scan, &jobs, profile, &mut |_| {}).expect("export");
+        println!("  loudness measured in {measured:.2} s");
         let bytes: u64 = jobs.iter().map(|j| std::fs::metadata(&j.path).map(|m| m.len()).unwrap_or(0)).sum();
         println!(
             "{name}: {} tracks in {:.2} s, {:.1} MB → {}",
@@ -82,10 +108,15 @@ fn main() {
                 let want = job.end - job.start.max(lead);
                 let ok = got == want;
                 failures += !ok as usize;
+                let out_scan = scanning::scan(&job.path, &mut |_| {}).expect("rescan");
+                let l = analyze(&job.path, &out_scan, &mut |_| {}).expect("reanalyze").range(0, out_scan.info.total_samples);
                 println!(
-                    "  {} {:>9.3}s  {}",
+                    "  {} {:>9.3}s  gain {:+5.1} dB → {:>6.1} LUFS, peak {:>5.1} dBTP  {}",
                     if ok { "ok  " } else { "FAIL" },
                     got as f64 / rate,
+                    job.gain_db,
+                    l.lufs.unwrap_or(f64::NAN),
+                    l.peak_db,
                     job.path.file_name().unwrap().to_string_lossy()
                 );
             }

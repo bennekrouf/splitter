@@ -31,7 +31,8 @@ fn export_one(source: &Path, profile: Profile, name: &str) -> PathBuf {
         start: A,
         end: B,
         path: out.clone(),
-        tags: Tags { title: "Été à Paris".into(), album: "Live".into(), track: 2, total: 9 },
+        gain_db: 0.0,
+        tags: Tags { replaygain: None, title: "Été à Paris".into(), album: "Live".into(), track: 2, total: 9 },
     };
     export(source, &s, &[job], profile, &mut |_| {}).unwrap();
     out

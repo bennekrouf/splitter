@@ -10,11 +10,47 @@ pub struct ExportSettings {
     pub naming: String,
     #[serde(default)]
     pub profile: Profile,
+    #[serde(default)]
+    pub normalize: Normalize,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { naming: "{nn} - {title}".into(), profile: Profile::Original }
+        Self { naming: "{nn} - {title}".into(), profile: Profile::Original, normalize: Normalize::Off }
+    }
+}
+
+/// Loudness adjustment applied when re-encoding (a byte copy can't change level; it gets
+/// ReplayGain tags instead).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Normalize {
+    #[default]
+    Off,
+    /// Every track to `target` LUFS: even levels, but quiet songs get as loud as loud ones.
+    Track { target: f32 },
+    /// One gain for the whole recording so its kept tracks average `target` LUFS; keeps the
+    /// dynamics between songs, usually right for a live set.
+    Album { target: f32 },
+}
+
+impl Normalize {
+    /// Never let normalization push the true peak above this.
+    pub const CEILING_DB: f64 = -1.0;
+    pub const CHOICES: [Normalize; 5] = [
+        Normalize::Off,
+        Normalize::Album { target: -14.0 },
+        Normalize::Album { target: -16.0 },
+        Normalize::Track { target: -14.0 },
+        Normalize::Track { target: -16.0 },
+    ];
+
+    pub fn label(&self) -> String {
+        match self {
+            Normalize::Off => "Loudness unchanged".into(),
+            Normalize::Album { target } => format!("Whole recording to {target} LUFS"),
+            Normalize::Track { target } => format!("Each track to {target} LUFS"),
+        }
     }
 }
 

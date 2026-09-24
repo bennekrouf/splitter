@@ -5,6 +5,7 @@ use crate::mp3index::Mp3Index;
 use crate::peaks::{AnalysisBuilder, Loudness, Peaks};
 use crate::source::Decoding;
 use anyhow::{anyhow, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -116,34 +117,36 @@ pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
     })
 }
 
-const CACHE_MAGIC: &[u8; 8] = b"SPLTIDX1";
+const SCAN_MAGIC: &[u8; 8] = b"SPLTIDX1";
 
+/// Identifies the exact file a cache entry was computed from.
 #[derive(PartialEq, Serialize, Deserialize)]
-struct CacheKey {
+pub(crate) struct CacheKey {
     path: PathBuf,
     size: u64,
     mtime_ns: u128,
 }
 
 impl CacheKey {
-    fn of(path: &Path) -> Result<Self> {
+    pub(crate) fn of(path: &Path) -> Result<Self> {
         let meta = std::fs::metadata(path)?;
         let mtime_ns = meta.modified()?.duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         Ok(Self { path: path.to_owned(), size: meta.len(), mtime_ns })
     }
 }
 
-fn cache_file(path: &Path) -> Option<PathBuf> {
+fn cache_file(path: &Path, ext: &str) -> Option<PathBuf> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
-    Some(dirs::cache_dir()?.join("splitter").join(format!("{:016x}.idx", h.finish())))
+    Some(dirs::cache_dir()?.join("splitter").join(format!("{:016x}.{ext}", h.finish())))
 }
 
-fn read_cache(path: &Path, key: &CacheKey) -> Option<Scan> {
-    let mut r = BufReader::new(File::open(cache_file(path)?).ok()?);
-    let mut magic = [0u8; 8];
-    std::io::Read::read_exact(&mut r, &mut magic).ok()?;
-    if &magic != CACHE_MAGIC {
+/// A cached `T` for `path`, if one exists for this exact version of the file.
+pub(crate) fn read_cached<T: DeserializeOwned>(path: &Path, ext: &str, magic: &[u8; 8], key: &CacheKey) -> Option<T> {
+    let mut r = BufReader::new(File::open(cache_file(path, ext)?).ok()?);
+    let mut m = [0u8; 8];
+    std::io::Read::read_exact(&mut r, &mut m).ok()?;
+    if &m != magic {
         return None;
     }
     let stored: CacheKey = bincode::deserialize_from(&mut r).ok()?;
@@ -153,14 +156,14 @@ fn read_cache(path: &Path, key: &CacheKey) -> Option<Scan> {
     bincode::deserialize_from(&mut r).ok()
 }
 
-fn write_cache(path: &Path, key: &CacheKey, scan: &Scan) -> Result<()> {
-    let file = cache_file(path).ok_or_else(|| anyhow!("no cache dir"))?;
+pub(crate) fn write_cached<T: Serialize>(path: &Path, ext: &str, magic: &[u8; 8], key: &CacheKey, value: &T) -> Result<()> {
+    let file = cache_file(path, ext).ok_or_else(|| anyhow!("no cache dir"))?;
     std::fs::create_dir_all(file.parent().unwrap())?;
-    let tmp = file.with_extension("tmp");
+    let tmp = file.with_extension(format!("{ext}.tmp"));
     let mut w = BufWriter::new(File::create(&tmp)?);
-    w.write_all(CACHE_MAGIC)?;
+    w.write_all(magic)?;
     bincode::serialize_into(&mut w, key)?;
-    bincode::serialize_into(&mut w, scan)?;
+    bincode::serialize_into(&mut w, value)?;
     w.flush()?;
     drop(w);
     std::fs::rename(tmp, file)?;
@@ -170,11 +173,11 @@ fn write_cache(path: &Path, key: &CacheKey, scan: &Scan) -> Result<()> {
 /// Cached scan if the file is unchanged, otherwise a fresh scan (then cached).
 pub fn load_or_scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
     let key = CacheKey::of(path)?;
-    if let Some(scan) = read_cache(path, &key) {
+    if let Some(scan) = read_cached(path, "idx", SCAN_MAGIC, &key) {
         return Ok(scan);
     }
     let scan = scan(path, progress)?;
-    if let Err(e) = write_cache(path, &key, &scan) {
+    if let Err(e) = write_cached(path, "idx", SCAN_MAGIC, &key, &scan) {
         eprintln!("splitter: could not cache scan for {}: {e:#}", path.display());
     }
     Ok(scan)

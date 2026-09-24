@@ -239,7 +239,7 @@ kbd {
 }
 .track {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 110px 60px 80px 28px;
+  grid-template-columns: 36px minmax(0, 1fr) 110px 60px 48px 44px 80px 28px;
   gap: 8px;
   align-items: center;
   padding: 3px 10px;
@@ -353,3 +353,12 @@ select.profile {
 .ab-side { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
 .ab-side.on { color: #111; background: var(--accent); border-color: var(--accent); }
 .ab-side.on.enc { background: #be8cff; border-color: #be8cff; }
+
+/* Loudness */
+.track .lufs, .track .peak { font-size: 12px; color: var(--dim); text-align: right; }
+.hot { color: var(--bad) !important; }
+.loud { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+/* Sidebar footer: batch export */
+.sidebar-foot { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.sidebar-foot button.primary { width: 100%; }

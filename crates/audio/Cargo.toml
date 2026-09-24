@@ -12,5 +12,6 @@ dirs.workspace = true
 symphonia.workspace = true
 cpal.workspace = true
 flacenc.workspace = true
+ebur128.workspace = true
 splitter-core.workspace = true
 mp3lame-encoder.workspace = true

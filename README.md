@@ -27,7 +27,8 @@ cargo run -p splitter-audio --release --example make_test_recording -- testdata 
 Export a folder from its cutlist without the UI, checking every track's length:
 
 ```bash
-cargo run -p splitter --release --example export_cutlist -- testdata --out /tmp/out --verify --profile mp3-v2
+cargo run -p splitter --release --example export_cutlist -- testdata --out /tmp/out --verify \
+    --profile mp3-v2 --normalize album:-14
 ```
 
 Scan and seek timings on any file:
@@ -62,7 +63,9 @@ cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min
 | X | leave the current track out of the export, or bring it back |
 | A | A/B: loop 12 s from the playhead, then switch between original and the export format |
 | Esc | stop A/B |
-| ⌘E | export the kept tracks |
+| F | flag the file to come back to |
+| ⌘E | export the kept tracks (queued) |
+| ⇧⌘E | export every file marked done |
 
 The *current track* is the one after the selected split, or the one under the playhead.
 **Paste tracklist…** takes one title per line (numbering, timestamps and durations are
@@ -128,11 +131,32 @@ compiled in statically; keep that in mind if you ever distribute the app.
 Tests decode every exported track and compare it sample by sample with the source, for CBR,
 VBR and 32 kbps MP3 (where the reservoir spans many frames) and WAV.
 
+### Queue
+
+Exports run one file at a time on a background thread. ⌘E queues the current file, **Export N
+done files** in the sidebar (⇧⌘E) queues every file marked done (⌘Enter). The sidebar shows
+each file's progress; **Cancel** stops after the current track and drops the rest. A finished
+file is marked *exported*.
+
+### Loudness
+
+After the files are scanned, each one's loudness is measured in the background (EBU R128: 400 ms
+block loudness every 100 ms, and true peak; ~4 s per hour of audio, cached). Track and set
+loudness are derived from those blocks instantly, so the track list's **LUFS** and **peak**
+columns follow every split change. Peaks above −1 dBTP are shown in red.
+
+- Every MP3/FLAC export gets **ReplayGain 2.0** tags (track, and album for the exported set).
+- Re-encoded exports can be **normalized**: *whole recording* (one gain for all tracks, keeping
+  the dynamics between songs; usually right for a live set) or *each track*, to −14 or −16 LUFS.
+  The gain never pushes the true peak above −1 dBTP. Original (byte copy) can't change level,
+  so it only gets the tags.
+
 ## How it works
 
 - **Scan (once per file, cached in `~/Library/Caches/splitter`)**: builds a byte-offset index of every
-  MP3 frame, min/max peaks at 5 zoom levels, and 50 ms loudness windows (used for silence detection
-  in step 2). About 2 s for an hour of VBR MP3.
+  MP3 frame, min/max peaks at 5 zoom levels, and 50 ms RMS windows (used for silence detection).
+  About 2 s for an hour of VBR MP3.
+- **Last folder**: reopened on start when no folder is given (`~/Library/Application Support/splitter`).
 - **Seeking**: MP3 seeks reopen the demuxer at the indexed frame 2 frames before the target and
   discard up to the exact sample. The tests check that this is sample-identical to a straight decode on
   CBR, VBR and WAV.

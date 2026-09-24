@@ -1,4 +1,5 @@
 pub mod export;
+pub mod loudness;
 pub mod mp3index;
 pub mod peaks;
 pub mod player;

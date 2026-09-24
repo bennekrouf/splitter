@@ -36,17 +36,53 @@ fn read_range(src: &mut dyn PcmSource, start: u64, end: u64, mut sink: impl FnMu
     Ok(())
 }
 
-/// Encode `[start, end)` of `src` with `profile` into `out`. `bits` is the source's bit depth
-/// for PCM sources (used by FLAC), `None` for MP3 sources.
+/// Scales another source's samples (normalization).
+struct Gain<'a> {
+    inner: &'a mut dyn PcmSource,
+    factor: f32,
+}
+
+impl PcmSource for Gain<'_> {
+    fn channels(&self) -> usize {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+
+    fn seek(&mut self, frame: u64) -> Result<()> {
+        self.inner.seek(frame)
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
+        let from = out.len();
+        let more = self.inner.read(out)?;
+        out[from..].iter_mut().for_each(|x| *x *= self.factor);
+        Ok(more)
+    }
+}
+
+/// Encode `[start, end)` of `src` with `profile` into `out`, `gain_db` louder. `bits` is the
+/// source's bit depth for PCM sources (used by FLAC), `None` for MP3 sources.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_track(
     profile: Profile,
     src: &mut dyn PcmSource,
     start: u64,
     end: u64,
     bits: Option<u32>,
+    gain_db: f64,
     tags: &Tags,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let mut gained;
+    let src: &mut dyn PcmSource = if gain_db.abs() > 1e-6 {
+        gained = Gain { inner: src, factor: 10f64.powf(gain_db / 20.0) as f32 };
+        &mut gained
+    } else {
+        src
+    };
     match profile {
         Profile::Original => bail!("Original is copied, not encoded"),
         Profile::Mp3Vbr { .. } | Profile::Mp3Cbr { .. } => {
@@ -280,6 +316,9 @@ fn vorbis_comment(tags: &Tags) -> Vec<u8> {
     if tags.track > 0 {
         fields.push(format!("TRACKNUMBER={}", tags.track));
         fields.push(format!("TRACKTOTAL={}", tags.total));
+    }
+    for (key, value) in tags.replaygain.iter().flat_map(|rg| rg.fields()) {
+        fields.push(format!("{key}={value}"));
     }
     let vendor = b"splitter";
     let mut out = Vec::new();

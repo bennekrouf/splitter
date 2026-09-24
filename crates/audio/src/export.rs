@@ -36,6 +36,32 @@ pub struct Tags {
     pub album: String,
     pub track: usize,
     pub total: usize,
+    pub replaygain: Option<ReplayGain>,
+}
+
+/// ReplayGain 2.0 values (reference −18 LUFS), as written to tags.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplayGain {
+    pub track_gain_db: f64,
+    /// Linear true peak.
+    pub track_peak: f64,
+    /// (gain dB, linear peak) for the whole set of exported tracks.
+    pub album: Option<(f64, f64)>,
+}
+
+impl ReplayGain {
+    /// `(key, value)` pairs in the usual text form.
+    pub fn fields(&self) -> Vec<(&'static str, String)> {
+        let mut f = vec![
+            ("REPLAYGAIN_TRACK_GAIN", format!("{:+.2} dB", self.track_gain_db)),
+            ("REPLAYGAIN_TRACK_PEAK", format!("{:.6}", self.track_peak)),
+        ];
+        if let Some((gain, peak)) = self.album {
+            f.push(("REPLAYGAIN_ALBUM_GAIN", format!("{gain:+.2} dB")));
+            f.push(("REPLAYGAIN_ALBUM_PEAK", format!("{peak:.6}")));
+        }
+        f
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +70,8 @@ pub struct ExportJob {
     pub end: u64,
     pub path: PathBuf,
     pub tags: Tags,
+    /// Level change in dB, applied only when re-encoding.
+    pub gain_db: f64,
 }
 
 /// Write every job with `profile`. `progress` is called with the number of files finished.
@@ -76,7 +104,7 @@ pub fn export(
         let result = match (&mut pcm, &scan.mp3, &wav) {
             (Some(pcm), _, _) => (|| {
                 let mut w = BufWriter::new(File::create(&tmp)?);
-                encode_track(profile, pcm.as_mut(), job.start, job.end, bits, &job.tags, &mut w)?;
+                encode_track(profile, pcm.as_mut(), job.start, job.end, bits, job.gain_db, &job.tags, &mut w)?;
                 w.flush()?;
                 Ok(())
             })(),
@@ -279,6 +307,17 @@ pub(crate) fn id3v2(tags: &Tags) -> Vec<u8> {
     if tags.track > 0 {
         text(b"TRCK", &format!("{}/{}", tags.track, tags.total));
     }
+    // ReplayGain as user-defined text frames (Latin-1: description, NUL, value).
+    for (key, value) in tags.replaygain.iter().flat_map(|rg| rg.fields()) {
+        let mut body = vec![0x00];
+        body.extend_from_slice(key.as_bytes());
+        body.push(0);
+        body.extend_from_slice(value.as_bytes());
+        frames.extend_from_slice(b"TXXX");
+        frames.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        frames.extend_from_slice(&[0, 0]);
+        frames.extend_from_slice(&body);
+    }
     let size = frames.len() as u32;
     let mut out = b"ID3\x03\x00\x00".to_vec();
     out.extend((0..4).rev().map(|i| ((size >> (7 * i)) & 0x7F) as u8)); // synchsafe
@@ -382,7 +421,7 @@ mod tests {
 
     #[test]
     fn id3_is_well_formed() {
-        let tag = id3v2(&Tags { title: "Été".into(), album: "Live".into(), track: 3, total: 12 });
+        let tag = id3v2(&Tags { title: "Été".into(), album: "Live".into(), track: 3, total: 12, replaygain: None });
         assert_eq!(&tag[..3], b"ID3");
         let size = tag[6..10].iter().fold(0usize, |a, &b| (a << 7) | b as usize);
         assert_eq!(size + 10, tag.len());

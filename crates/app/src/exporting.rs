@@ -1,102 +1,245 @@
-//! Exporting the current recording's tracks on a background thread.
+//! The export queue: recordings are exported one after another on a worker thread, with
+//! progress per file and a cancel that stops after the current track.
 
-use crate::state::{key_of, App, ExportMsg, ExportState};
+use crate::state::{key_of, App, ScanState};
+use crossbeam_channel::{Receiver, Sender};
 use dioxus::prelude::*;
 use splitter_audio::export::{export, ExportJob, Tags};
-use splitter_core::export::{plan, Profile, SourceFacts};
-use splitter_audio::{Bitrate, SourceInfo};
+use splitter_audio::loudness::{apply_to_jobs, load_or_analyze, LoudnessMap};
+use splitter_audio::{Bitrate, Scan, SourceInfo};
+use splitter_core::export::{plan, Normalize, Profile, SourceFacts};
 use splitter_core::Status;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Where one recording stands in the export queue.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExportStatus {
+    Queued,
+    /// Measuring loudness before a normalized export.
+    Measuring,
+    Running { done: usize, total: usize },
+    Finished { dir: PathBuf, count: usize },
+    Failed(String),
+    Cancelled,
+}
+
+impl ExportStatus {
+    pub fn is_active(&self) -> bool {
+        matches!(self, ExportStatus::Queued | ExportStatus::Measuring | ExportStatus::Running { .. })
+    }
+}
+
+struct Task {
+    key: String,
+    generation: u64,
+    source: PathBuf,
+    scan: Arc<Scan>,
+    jobs: Vec<ExportJob>,
+    dir: PathBuf,
+    profile: Profile,
+    normalize: Normalize,
+    loudness: Option<Arc<LoudnessMap>>,
+}
+
+enum Event {
+    Status(String, ExportStatus),
+    /// Loudness measured for a normalized export; worth keeping.
+    Loudness(PathBuf, Arc<LoudnessMap>),
+}
+
+/// Handle to the export worker.
+#[derive(Clone)]
+pub struct Exporter {
+    tx: Sender<Task>,
+    events: Receiver<Event>,
+    /// Tasks from an older generation are skipped: bumping it cancels everything queued.
+    generation: Arc<AtomicU64>,
+}
+
+impl Exporter {
+    pub fn spawn() -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded::<Task>();
+        let (etx, events) = crossbeam_channel::unbounded();
+        let generation = Arc::new(AtomicU64::new(0));
+        let g = generation.clone();
+        std::thread::Builder::new()
+            .name("splitter-export".into())
+            .spawn(move || {
+                for task in rx {
+                    run(task, &g, &etx);
+                }
+            })
+            .expect("spawn export thread");
+        Self { tx, events, generation }
+    }
+}
+
+fn run(mut task: Task, generation: &AtomicU64, events: &Sender<Event>) {
+    let key = task.key.clone();
+    let status = |s: ExportStatus| {
+        let _ = events.send(Event::Status(key.clone(), s));
+    };
+    let current = task.generation;
+    let cancelled = || generation.load(Ordering::SeqCst) != current;
+    if cancelled() {
+        return status(ExportStatus::Cancelled);
+    }
+    let reencode = task.profile != Profile::Original;
+    // Normalizing needs loudness; otherwise it only adds ReplayGain tags when already known.
+    if task.loudness.is_none() && reencode && task.normalize != Normalize::Off {
+        status(ExportStatus::Measuring);
+        match load_or_analyze(&task.source, &task.scan, &mut |_| {}) {
+            Ok(map) => {
+                let map = Arc::new(map);
+                let _ = events.send(Event::Loudness(task.source.clone(), map.clone()));
+                task.loudness = Some(map);
+            }
+            Err(e) => return status(ExportStatus::Failed(format!("measuring loudness: {e:#}"))),
+        }
+    }
+    if let Some(map) = &task.loudness {
+        apply_to_jobs(&mut task.jobs, map, task.normalize, reencode);
+    }
+    let total = task.jobs.len();
+    for (i, job) in task.jobs.iter().enumerate() {
+        if cancelled() {
+            return status(ExportStatus::Cancelled);
+        }
+        status(ExportStatus::Running { done: i, total });
+        if let Err(e) = export(&task.source, &task.scan, std::slice::from_ref(job), task.profile, &mut |_| {}) {
+            return status(ExportStatus::Failed(format!("{e:#}")));
+        }
+    }
+    status(ExportStatus::Finished { dir: task.dir, count: total });
+}
+
+/// Where a recording's tracks go: a folder named after it, next to it.
+pub fn export_dir_of(path: &Path) -> Option<PathBuf> {
+    let stem = path.file_stem()?.to_string_lossy().into_owned();
+    Some(path.parent()?.join(stem))
+}
 
 impl App {
-    /// Where the current recording's tracks go: a folder named after it, next to it.
-    pub fn export_dir(&self) -> Option<PathBuf> {
-        let path = self.selected_path()?;
-        let stem = path.file_stem()?.to_string_lossy().into_owned();
-        Some(path.parent()?.join(stem))
-    }
-
-    /// ⌘E: write every kept track of the current recording.
-    pub fn export_current(mut self) {
-        if matches!(*self.export.peek(), ExportState::Running { .. }) {
-            return;
-        }
-        let (Some(path), Some(scan), Some(dir)) = (self.selected_path(), self.current_scan(), self.export_dir()) else {
-            return;
-        };
+    /// Queue a recording for export. Returns false if it can't be exported yet.
+    fn enqueue(mut self, path: PathBuf) -> bool {
         let key = key_of(&path);
+        if self.exports.peek().get(&key).is_some_and(|s| s.is_active()) {
+            return true;
+        }
+        let scan = match self.scans.peek().get(&path) {
+            Some(ScanState::Ready(s)) => s.clone(),
+            _ => return false,
+        };
+        let Some(dir) = export_dir_of(&path) else { return false };
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let src_ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "mp3".into());
         let settings = self.cutlist.peek().export.clone();
-        let profile = settings.profile;
-        let ext = profile.extension(&src_ext).to_string();
-        let Some(planned) = self.peek_edit(|e| plan(e, scan.info.total_samples, &stem, &settings)) else { return };
+        let ext = settings.profile.extension(&src_ext).to_string();
+        let planned = match self.cutlist.peek().recordings.get(&key) {
+            Some(edit) => plan(edit, scan.info.total_samples, &stem, &settings),
+            None => plan(&Default::default(), scan.info.total_samples, &stem, &settings),
+        };
         if planned.is_empty() {
-            self.error.set(Some("Every track is dropped; there is nothing to export.".into()));
-            return;
+            self.exports.write().insert(key, ExportStatus::Failed("every track is left out".into()));
+            return false;
         }
-        let jobs: Vec<ExportJob> = planned
+        let jobs = planned
             .iter()
             .map(|t| ExportJob {
                 start: t.start,
                 end: t.end,
                 path: dir.join(format!("{}.{ext}", t.stem)),
-                tags: Tags { title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total },
+                gain_db: 0.0,
+                tags: Tags { title: t.title.clone(), album: stem.clone(), track: t.number, total: t.total, replaygain: None },
             })
             .collect();
-
-        let (tx, rx) = crossbeam_channel::unbounded();
-        std::thread::Builder::new()
-            .name("splitter-export".into())
-            .spawn(move || {
-                let progress_tx = tx.clone();
-                let result = export(&path, &scan, &jobs, profile, &mut |n| {
-                    let _ = progress_tx.send(ExportMsg::Progress(n));
-                });
-                let _ = tx.send(match result {
-                    Ok(()) => ExportMsg::Finished,
-                    Err(e) => ExportMsg::Failed(format!("{e:#}")),
-                });
-            })
-            .expect("spawn export thread");
-        self.export_rx.set(Some(rx));
-        self.export.set(ExportState::Running { key, done: 0, total: planned.len() });
+        let exporter = self.exporter.peek().clone();
+        let task = Task {
+            key: key.clone(),
+            generation: exporter.generation.load(Ordering::SeqCst),
+            loudness: self.loudness.peek().get(&path).cloned(),
+            source: path,
+            scan,
+            jobs,
+            dir,
+            profile: settings.profile,
+            normalize: settings.normalize,
+        };
+        if exporter.tx.send(task).is_ok() {
+            self.exports.write().insert(key, ExportStatus::Queued);
+        }
+        true
     }
 
-    /// Called from `tick`: follow a running export.
-    pub fn poll_export(mut self) {
-        let Some(rx) = self.export_rx.peek().clone() else { return };
-        while let Ok(msg) = rx.try_recv() {
-            let ExportState::Running { key, done, total } = self.export.peek().clone() else { return };
-            match msg {
-                ExportMsg::Progress(n) => {
-                    if n != done {
-                        self.export.set(ExportState::Running { key, done: n, total });
-                    }
-                }
-                ExportMsg::Finished => {
-                    let dir = self.export_dir_for(&key).unwrap_or_default();
-                    if let Some(edit) = self.cutlist.write().recordings.get_mut(&key) {
-                        edit.status = Status::Exported;
-                    }
-                    self.mark_dirty();
-                    self.save_now();
-                    self.export.set(ExportState::Finished { key, dir, count: total });
-                    self.export_rx.set(None);
-                }
-                ExportMsg::Failed(e) => {
-                    self.error.set(Some(format!("Export failed: {e}")));
-                    self.export.set(ExportState::Idle);
-                    self.export_rx.set(None);
-                }
+    /// ⌘E: export the current recording.
+    pub fn export_current(mut self) {
+        let Some(path) = self.selected_path() else { return };
+        if !self.enqueue(path) {
+            self.error.set(Some("This recording can't be exported yet (still analysing, or nothing kept).".into()));
+        }
+    }
+
+    /// Recordings marked done (and not exported since).
+    pub fn done_recordings(&self) -> Vec<PathBuf> {
+        let cutlist = self.cutlist.peek();
+        self.recordings
+            .peek()
+            .iter()
+            .filter(|r| cutlist.recordings.get(&key_of(&r.path)).is_some_and(|e| e.status == Status::Done))
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    /// ⇧⌘E: export every recording marked done.
+    pub fn export_done(mut self) {
+        let paths = self.done_recordings();
+        if paths.is_empty() {
+            self.error.set(Some("No recording is marked done yet (⌘Enter marks one).".into()));
+            return;
+        }
+        let skipped = paths.into_iter().filter(|p| !self.enqueue(p.clone())).count();
+        if skipped > 0 {
+            self.error.set(Some(format!("{skipped} recording(s) skipped: still analysing, or nothing kept.")));
+        }
+    }
+
+    /// Stop after the current track and drop everything queued.
+    pub fn cancel_exports(mut self) {
+        self.exporter.peek().generation.fetch_add(1, Ordering::SeqCst);
+        for status in self.exports.write().values_mut() {
+            if status.is_active() {
+                *status = ExportStatus::Cancelled;
             }
         }
     }
 
-    fn export_dir_for(&self, key: &str) -> Option<PathBuf> {
-        let folder = self.folder.peek().clone()?;
-        let stem = std::path::Path::new(key).file_stem()?.to_string_lossy().into_owned();
-        Some(folder.join(stem))
+    /// Called from `tick`: follow the worker.
+    pub fn poll_export(mut self) {
+        let events = self.exporter.peek().events.clone();
+        while let Ok(event) = events.try_recv() {
+            match event {
+                Event::Status(key, status) => {
+                    // A cancel already marked it; ignore the worker's late progress.
+                    let was_cancelled = self.exports.peek().get(&key) == Some(&ExportStatus::Cancelled);
+                    if was_cancelled && status.is_active() {
+                        continue;
+                    }
+                    if matches!(status, ExportStatus::Finished { .. }) {
+                        if let Some(edit) = self.cutlist.write().recordings.get_mut(&key) {
+                            edit.status = Status::Exported;
+                        }
+                        self.mark_dirty();
+                        self.save_now();
+                    }
+                    self.exports.write().insert(key, status);
+                }
+                Event::Loudness(path, map) => {
+                    self.loudness.write().insert(path, map);
+                }
+            }
+        }
     }
 
     pub fn set_profile(mut self, profile: Profile) {
@@ -109,8 +252,14 @@ impl App {
         self.save_now();
     }
 
+    pub fn set_normalize(mut self, normalize: Normalize) {
+        self.cutlist.write().export.normalize = normalize;
+        self.mark_dirty();
+        self.save_now();
+    }
+
     /// Open the export folder in Finder.
-    pub fn reveal_export(&self, dir: &std::path::Path) {
+    pub fn reveal_export(&self, dir: &Path) {
         let _ = std::process::Command::new("open").arg(dir).spawn();
     }
 }

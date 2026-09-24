@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 use splitter_audio::{Player, Scan, ScanEvent, Scanner};
 use splitter_core::cutlist::Cutlist;
 use splitter_core::edit::{History, Snapshot};
+use crate::exporting::{ExportStatus, Exporter};
+use splitter_audio::loudness::LoudnessMap;
 use splitter_core::{list_recordings, Recording, Status};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,25 +60,19 @@ pub struct App {
     pub editing_title: Signal<Option<usize>>,
     /// Text of the "paste tracklist" dialog while it's open.
     pub paste: Signal<Option<String>>,
-    pub export: Signal<ExportState>,
-    pub export_rx: Signal<Option<crossbeam_channel::Receiver<ExportMsg>>>,
+    pub exporter: Signal<Exporter>,
+    /// Export queue state per recording (by cutlist key).
+    pub exports: Signal<HashMap<String, ExportStatus>>,
+    /// Loudness measurements per recording, as they arrive from the background worker.
+    pub loudness: Signal<HashMap<PathBuf, Arc<LoudnessMap>>>,
     pub ab: Signal<crate::ab::AbState>,
     pub ab_rx: Signal<Option<crossbeam_channel::Receiver<crate::ab::AbResult>>>,
+    /// When the current error message was first shown (they fade after a while).
+    error_since: Signal<Option<Instant>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum ExportState {
-    #[default]
-    Idle,
-    Running { key: String, done: usize, total: usize },
-    Finished { key: String, dir: PathBuf, count: usize },
-}
-
-pub enum ExportMsg {
-    Progress(usize),
-    Finished,
-    Failed(String),
-}
+/// How long an error message stays up.
+const ERROR_SECS: u64 = 10;
 
 impl App {
     pub fn new() -> Self {
@@ -99,10 +95,12 @@ impl App {
             drag: Signal::new(None),
             editing_title: Signal::new(None),
             paste: Signal::new(None),
-            export: Signal::new(ExportState::Idle),
-            export_rx: Signal::new(None),
+            exporter: Signal::new(Exporter::spawn()),
+            exports: Signal::new(HashMap::new()),
+            loudness: Signal::new(HashMap::new()),
             ab: Signal::new(Default::default()),
             ab_rx: Signal::new(None),
+            error_since: Signal::new(None),
         }
     }
 
@@ -149,6 +147,7 @@ impl App {
         };
         self.cutlist.set(cutlist);
         self.history.write().clear();
+        prefs::remember_folder(&dir);
         let pending: Vec<PathBuf> = {
             let scans = self.scans.peek();
             recordings
@@ -197,9 +196,39 @@ impl App {
         self.save_now();
         let state = self.scans.peek().get(&path).cloned();
         match state {
-            Some(ScanState::Ready(scan)) => self.load(&path, &scan),
+            Some(ScanState::Ready(scan)) => {
+                self.load(&path, &scan);
+                if !self.loudness.peek().contains_key(&path) {
+                    self.scanner.peek().prioritize_loudness(path, scan);
+                }
+            }
             Some(ScanState::Failed(_)) => {}
             _ => self.scanner.peek().prioritize(path),
+        }
+    }
+
+    /// F: flag the current recording to come back to (or unflag it).
+    pub fn toggle_flag(mut self) {
+        let Some(path) = self.selected_path() else { return };
+        if let Some(edit) = self.cutlist.write().recordings.get_mut(&key_of(&path)) {
+            edit.status = if edit.status == Status::Flagged { Status::InProgress } else { Status::Flagged };
+        }
+        self.mark_dirty();
+        self.save_now();
+    }
+
+    /// Clear an error message once it has been up for a while.
+    fn fade_error(mut self) {
+        let shown = self.error.peek().is_some();
+        let since = *self.error_since.peek();
+        match (shown, since) {
+            (true, None) => self.error_since.set(Some(Instant::now())),
+            (true, Some(t)) if t.elapsed() > Duration::from_secs(ERROR_SECS) => {
+                self.error.set(None);
+                self.error_since.set(None);
+            }
+            (false, Some(_)) => self.error_since.set(None),
+            _ => {}
         }
     }
 
@@ -304,6 +333,9 @@ impl App {
                 ScanEvent::Failed(p, e) => {
                     self.scans.write().insert(p, ScanState::Failed(e));
                 }
+                ScanEvent::Loudness(p, map) => {
+                    self.loudness.write().insert(p, map);
+                }
             }
         }
 
@@ -323,6 +355,7 @@ impl App {
             self.follow(pos);
         }
         self.poll_export();
+        self.fade_error();
         self.poll_ab();
         if self.cut_dirty.peek().is_some_and(|t| t.elapsed() > Duration::from_millis(400)) {
             self.save_now();
@@ -356,4 +389,26 @@ impl App {
 /// Cutlist key for a recording: its file name, so the folder can be moved or renamed.
 pub fn key_of(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Small settings kept between runs (the last opened folder).
+pub mod prefs {
+    use std::path::{Path, PathBuf};
+
+    fn file() -> Option<PathBuf> {
+        Some(dirs::config_dir()?.join("splitter").join("last-folder"))
+    }
+
+    pub fn remember_folder(dir: &Path) {
+        if let Some(f) = file() {
+            let _ = std::fs::create_dir_all(f.parent().unwrap());
+            let _ = std::fs::write(f, dir.to_string_lossy().as_bytes());
+        }
+    }
+
+    /// The folder open when the app last closed, if it still exists.
+    pub fn last_folder() -> Option<PathBuf> {
+        let dir = PathBuf::from(std::fs::read_to_string(file()?).ok()?.trim());
+        dir.is_dir().then_some(dir)
+    }
 }
