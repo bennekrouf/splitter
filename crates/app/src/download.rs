@@ -52,8 +52,23 @@ impl Kind {
     }
 }
 
+/// Lines of the last download's log kept for the sidebar.
+const LOG_LINES: usize = 300;
+
+/// What the last download printed (yt-dlp's own lines and ours), kept after it ends so a
+/// failure can be read, until closed.
+#[derive(Clone, Default, PartialEq)]
+pub struct DownloadLog {
+    pub lines: Vec<String>,
+    /// Set once it's over: the file's name, or why it failed.
+    pub outcome: Option<Result<String, String>>,
+    /// Whether the lines are shown (they open by themselves on failure).
+    pub open: bool,
+}
+
 enum Event {
     Phase(Phase),
+    Log(String),
     Done(PathBuf),
     Failed(String),
 }
@@ -118,6 +133,9 @@ fn run(
     let phase = |p: Phase| {
         let _ = tx.send(Event::Phase(p));
     };
+    let log = |s: String| {
+        let _ = tx.send(Event::Log(s));
+    };
     let is_cancelled = || cancelled.load(Ordering::SeqCst);
     let tools = tools::ensure(tools_dir, &mut |p| phase(Phase::Installing(p)), &is_cancelled)?;
     let ffmpeg = match kind {
@@ -126,6 +144,7 @@ fn run(
     };
     phase(Phase::Starting);
     std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    log(format!("Running yt-dlp (formats {}) into {}", kind.formats(), dir.display()));
 
     let mut cmd = tools::command(&tools.yt_dlp);
     cmd.arg("--ignore-config")
@@ -183,6 +202,7 @@ fn run(
         return Ok(file); // MP3 or a video: the app plays and exports it directly
     }
     phase(Phase::Converting(None));
+    log("Converting the AAC audio to WAV…".into());
     let wav = file.with_extension("wav");
     splitter_audio::transcode::decode_to_wav(&file, &wav, &mut |p| phase(Phase::Converting(Some(p))))
         .map_err(|e| format!("Could not convert the download to WAV: {e:#}"))?;
@@ -197,24 +217,31 @@ fn read_output(
     tx: &Sender<Event>,
 ) -> (Vec<PathBuf>, Vec<String>) {
     // Progress can come on either stream; errors come on stderr.
+    // Everything else goes to the log as is.
     let etx = tx.clone();
     let errors = std::thread::spawn(move || {
         let mut errors = Vec::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if let Some(p) = parse_progress(&line) {
                 let _ = etx.send(Event::Phase(p));
-            } else if let Some(e) = line.strip_prefix("ERROR:") {
+                continue;
+            }
+            if let Some(e) = line.strip_prefix("ERROR:") {
                 errors.push(e.trim().to_owned());
             }
+            let _ = etx.send(Event::Log(line));
         }
         errors
     });
     let mut files = Vec::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Some(path) = line.strip_prefix(FILE).map(str::trim) {
+            let _ = tx.send(Event::Log(format!("Saved {path}")));
             files.push(PathBuf::from(path));
         } else if let Some(p) = parse_progress(&line) {
             let _ = tx.send(Event::Phase(p));
+        } else {
+            let _ = tx.send(Event::Log(line));
         }
     }
     (files, errors.join().unwrap_or_default())
@@ -238,6 +265,12 @@ fn explain(err: &str, kind: Kind) -> String {
             Kind::Audio => " — this site offers no M4A or MP3 audio for it",
             Kind::Video => " — this site offers no H.264 MP4 video for it; try Audio",
         }
+    } else if err.contains("members-only") || err.contains("Join this channel") {
+        " — this video is only for the channel's paying members, which the downloader can't sign in as"
+    } else if err.contains("Private video") {
+        " — this video is private"
+    } else if err.contains("Video unavailable") || err.contains("not available in your country") {
+        " — this video was removed, or isn't available where you are"
     } else if err.contains("Sign in to confirm") || err.contains("not a bot") || err.contains("HTTP Error 403") {
         " — YouTube is refusing this network for now; yt-dlp updates itself daily, so try again later"
     } else {
@@ -261,9 +294,15 @@ impl App {
             self.error.set(Some("That doesn't look like a link (it should start with https://)".into()));
             return;
         }
+        let what = match kind {
+            Kind::Audio => "audio",
+            Kind::Video => "video",
+        };
+        self.download_log
+            .set(Some(DownloadLog { lines: vec![format!("Downloading the {what} of {url}")], ..Default::default() }));
         match Download::start(url, kind, &downloads_dir(), &tools::dir()) {
             Ok(d) => self.download.set(Some(d)),
-            Err(e) => self.error.set(Some(e)),
+            Err(e) => self.finish_log(Err(e)),
         }
     }
 
@@ -272,6 +311,24 @@ impl App {
             d.cancel();
         }
         self.download.set(None);
+        self.finish_log(Err("Download cancelled".into()));
+    }
+
+    /// Record how the download ended; a failure opens the log so its reason can be read.
+    fn finish_log(mut self, outcome: Result<String, String>) {
+        if let Some(log) = self.download_log.write().as_mut() {
+            log.open |= outcome.is_err();
+            log.outcome = Some(outcome);
+        }
+    }
+
+    fn push_log(mut self, line: String) {
+        if let Some(log) = self.download_log.write().as_mut() {
+            if log.lines.len() >= LOG_LINES {
+                log.lines.remove(0);
+            }
+            log.lines.push(line);
+        }
     }
 
     /// Called every frame.
@@ -284,14 +341,19 @@ impl App {
             let Ok(event) = event else { return };
             let phase = match event {
                 Event::Phase(p) => p,
+                Event::Log(line) => {
+                    self.push_log(line);
+                    continue;
+                }
                 Event::Done(path) => {
                     self.download.set(None);
+                    self.finish_log(Ok(path.file_name().unwrap_or_default().to_string_lossy().into_owned()));
                     self.open(&path);
                     return;
                 }
                 Event::Failed(e) => {
                     self.download.set(None);
-                    self.error.set(Some(e));
+                    self.finish_log(Err(e));
                     return;
                 }
             };
@@ -335,7 +397,7 @@ mod tests {
         loop {
             match d.events.recv_timeout(std::time::Duration::from_secs(300)).expect("timed out") {
                 Event::Phase(Phase::Downloading(Some(_))) => downloaded = true,
-                Event::Phase(_) => {}
+                Event::Phase(_) | Event::Log(_) => {}
                 Event::Done(path) => {
                     assert!(downloaded);
                     assert_eq!(path.extension().unwrap(), "wav");
@@ -362,7 +424,7 @@ mod tests {
             Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", Kind::Video, &dir, &tools::dir()).unwrap();
         loop {
             match d.events.recv_timeout(std::time::Duration::from_secs(300)).expect("timed out") {
-                Event::Phase(_) => {}
+                Event::Phase(_) | Event::Log(_) => {}
                 Event::Done(path) => {
                     // One file with picture and sound, whose sound opens like any recording's.
                     assert_eq!(path.extension().unwrap(), "mp4");
