@@ -333,6 +333,7 @@ fn Sidebar() -> Element {
                 }
             }
             DownloadStatus {}
+            DownloadLogPanel {}
             if let Some(name) = folder {
                 div { class: "folder", title: "{name}", "{name}" }
             }
@@ -667,6 +668,49 @@ fn DownloadStatus() -> Element {
             }
             div { class: if frac.is_none() { "progress indeterminate" } else { "progress" },
                 div { style: "width: {frac.unwrap_or(1.0) * 100.0}%" }
+            }
+        }
+    }
+}
+
+/// The last download's outcome and yt-dlp's output, under the progress. Kept after the download
+/// ends (a failure opens it) until closed.
+#[component]
+fn DownloadLogPanel() -> Element {
+    let app = use_context::<state::App>();
+    let Some(log) = app.download_log.read().clone() else { return rsx! {} };
+    let mut state = app.download_log;
+    rsx! {
+        div { class: "download-log",
+            div { class: "download-row",
+                match &log.outcome {
+                    Some(Ok(name)) => rsx! { span { class: "ok", title: "{name}", "✓ Downloaded" } },
+                    Some(Err(_)) => rsx! { span { class: "bad", "✗ Download failed" } },
+                    None => rsx! { span { class: "dim", "Downloader output" } },
+                }
+                span { class: "spacer" }
+                button {
+                    onclick: move |_| {
+                        if let Some(l) = state.write().as_mut() {
+                            l.open = !l.open;
+                        }
+                    },
+                    if log.open { "Hide log" } else { "Show log" }
+                }
+                if log.outcome.is_some() {
+                    button { title: "Close", onclick: move |_| state.set(None), "×" }
+                }
+            }
+            if let Some(Err(e)) = &log.outcome {
+                div { class: "download-error", "{e}" }
+            }
+            if log.open {
+                // Reversed in a bottom-anchored column: stays scrolled to the newest line.
+                div { class: "log",
+                    for (i, line) in log.lines.iter().enumerate().rev() {
+                        div { key: "{i}", "{line}" }
+                    }
+                }
             }
         }
     }
