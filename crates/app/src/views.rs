@@ -445,9 +445,24 @@ fn Editor() -> Element {
     let body = match scans.get(&rec.path) {
         Some(ScanState::Ready(scan)) => {
             let scan = ScanRef(scan.clone());
+            // A video's own picture, or the one next to an audio recording (a video download).
+            let video = if splitter_core::is_video(&rec.path) {
+                Some(rec.path.clone())
+            } else {
+                splitter_core::companion_video(&rec.path)
+            };
             rsx! {
                 Info { scan: scan.clone() }
-                Overview { scan: scan.clone() }
+                // A video shows its picture where a recording shows its overview waveform.
+                if let Some(video) = video {
+                    crate::video::VideoPreview {
+                        key: "{video.display()}",
+                        path: video,
+                        rate: scan.0.info.sample_rate,
+                    }
+                } else {
+                    Overview { scan: scan.clone() }
+                }
                 Detail { scan: scan.clone() }
                 Transport { scan: scan.clone() }
                 ReviewBar { scan: scan.clone() }
@@ -663,6 +678,8 @@ fn DownloadStatus() -> Element {
 #[component]
 fn UrlDialog() -> Element {
     let app = use_context::<state::App>();
+    // Remembered while the app runs: the next link is likely the same kind.
+    let mut kind = use_signal(crate::download::Kind::default);
     let Some(text) = (app.url_dialog)() else { return rsx! {} };
     let mut dialog = app.url_dialog;
     let close = move || {
@@ -676,7 +693,7 @@ fn UrlDialog() -> Element {
         let url = app.url_dialog.peek().clone();
         if let Some(url) = url {
             close();
-            app.start_download(&url);
+            app.start_download(&url, kind());
         }
     };
     let dir = crate::download::downloads_dir();
@@ -685,8 +702,22 @@ fn UrlDialog() -> Element {
         div { class: "modal-backdrop", onclick: move |_| close(),
             div { class: "modal", onclick: move |e| e.stop_propagation(),
                 h2 { "Open from URL" }
+                div { class: "segmented",
+                    for (k, label) in [(crate::download::Kind::Audio, "Audio"), (crate::download::Kind::Video, "Video")] {
+                        button {
+                            key: "{label}",
+                            class: if kind() == k { "on" } else { "" },
+                            onclick: move |_| kind.set(k),
+                            "{label}"
+                        }
+                    }
+                }
                 p { class: "dim",
-                    "The audio is downloaded, converted to WAV and saved in {dir.display()}. "
+                    match kind() {
+                        crate::download::Kind::Audio => "The audio is downloaded, converted to WAV and saved in ",
+                        crate::download::Kind::Video => "The audio is downloaded as WAV, with the picture next to it as MP4 (up to 1080p), and saved in ",
+                    }
+                    "{dir.display()}. "
                     "Works with YouTube and most other video sites. "
                     "The first time, the downloader (yt-dlp, about 75 MB) is set up automatically."
                 }
