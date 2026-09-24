@@ -14,6 +14,10 @@ crossbeam-channel.workspace = true
 dirs.workspace = true
 # Decodes assets/icon.png into the runtime window icon; png is the only format needed.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Installing and updating yt-dlp and Deno for "Open URL" (download, verify, unzip).
+ureq = "3.4.2"
+sha2 = "0.11.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 symphonia.workspace = true

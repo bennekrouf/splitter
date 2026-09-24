@@ -1,19 +1,21 @@
-//! Re-encoding tracks to another format (MP3 via LAME, FLAC, 16-bit WAV), and short previews
-//! of what an encoding sounds like, for A/B listening.
+//! Re-encoding tracks to another format (MP3 via LAME, FLAC, 16-bit WAV), short previews
+//! of what an encoding sounds like, for A/B listening, and whole-file conversion to WAV.
 //!
 //! Input always comes from a `PcmSource`, so it is sample-exact in the same numbering as the
 //! splits. MP3 output carries LAME's own gapless header, so players trim it back to exactly the
 //! track's samples.
 
 use crate::export::{id3v2, Tags};
-use crate::source::PcmSource;
+use crate::source::{GenericSource, PcmSource};
 use anyhow::{anyhow, bail, Context, Result};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use mp3lame_encoder::{Bitrate, Builder, FlushGap, InterleavedPcm, MonoPcm, Quality, VbrMode};
 use splitter_core::export::Profile;
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::num::NonZeroU32;
+use std::path::Path;
 
 /// Sample rates MP3 can carry; anything else is resampled by LAME.
 const MP3_RATES: [u32; 9] = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
@@ -345,8 +347,18 @@ fn encode_wav16(src: &mut dyn PcmSource, start: u64, end: u64, out: &mut dyn Wri
     let ch = src.channels() as u32;
     let rate = src.sample_rate();
     let data_len = (end - start) * ch as u64 * 2;
+    wav16_header(out, ch, rate, data_len)?;
+    let mut bytes = Vec::with_capacity(16384);
+    read_range(src, start, end, |chunk| {
+        bytes.clear();
+        bytes.extend(chunk.iter().flat_map(|&x| (to_int(x, 16) as i16).to_le_bytes()));
+        out.write_all(&bytes).context("writing WAV")
+    })
+}
+
+fn wav16_header(out: &mut dyn Write, ch: u32, rate: u32, data_len: u64) -> Result<()> {
     if 36 + data_len > u32::MAX as u64 {
-        bail!("track is larger than 4 GB, which WAV can't hold");
+        bail!("audio is larger than 4 GB, which WAV can't hold");
     }
     out.write_all(b"RIFF")?;
     out.write_all(&((36 + data_len) as u32).to_le_bytes())?;
@@ -360,12 +372,36 @@ fn encode_wav16(src: &mut dyn PcmSource, start: u64, end: u64, out: &mut dyn Wri
     out.write_all(&16u16.to_le_bytes())?;
     out.write_all(b"data")?;
     out.write_all(&(data_len as u32).to_le_bytes())?;
-    let mut bytes = Vec::with_capacity(16384);
-    read_range(src, start, end, |chunk| {
+    Ok(())
+}
+
+/// Decode any file symphonia reads (e.g. a downloaded AAC .m4a) into a 16-bit WAV at `dst`.
+/// Written to a temporary name first, so a half-written file never shows up as a recording.
+pub fn decode_to_wav(src: &Path, dst: &Path, progress: &mut dyn FnMut(f32)) -> Result<()> {
+    let mut source = GenericSource::open(src)?;
+    let (ch, rate) = (source.channels() as u32, source.sample_rate());
+    let total = source.total_frames();
+    let tmp = dst.with_extension("wav.part");
+    let mut out = BufWriter::new(File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?);
+    // Sizes are patched in once the length is known.
+    wav16_header(&mut out, ch, rate, 0)?;
+    let (mut buf, mut bytes, mut frames) = (Vec::new(), Vec::new(), 0u64);
+    while source.read(&mut buf)? {
         bytes.clear();
-        bytes.extend(chunk.iter().flat_map(|&x| (to_int(x, 16) as i16).to_le_bytes()));
-        out.write_all(&bytes).context("writing WAV")
-    })
+        bytes.extend(buf.iter().flat_map(|&x| (to_int(x, 16) as i16).to_le_bytes()));
+        out.write_all(&bytes).context("writing WAV")?;
+        frames += (buf.len() / ch as usize) as u64;
+        buf.clear();
+        if let Some(t) = total.filter(|&t| t > 0) {
+            progress((frames as f64 / t as f64).min(1.0) as f32);
+        }
+    }
+    let mut file = out.into_inner().map_err(|e| e.into_error())?;
+    file.seek(SeekFrom::Start(0))?;
+    wav16_header(&mut file, ch, rate, frames * ch as u64 * 2)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, dst).with_context(|| format!("renaming to {}", dst.display()))
 }
 
 // ---------------------------------------------------------------------------------------------

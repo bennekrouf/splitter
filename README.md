@@ -20,14 +20,12 @@ Or start without an argument and use **Open folder…** (⌘O).
 
 ### From a YouTube link
 
-**URL…** (⌘U) downloads a video's audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp), converts it
-to WAV and opens it from `~/Music/Splitter/Downloads`. Both tools must be installed:
-
-```bash
-brew install yt-dlp ffmpeg
-```
-
-YouTube changes often; when downloads start failing, `brew upgrade yt-dlp` is almost always the fix.
+**URL…** (⌘U) downloads a video's audio and opens it from `~/Music/Splitter/Downloads`. Nothing
+needs installing: on first use the app fetches [yt-dlp](https://github.com/yt-dlp/yt-dlp)'s
+standalone build (Python included) and [Deno](https://deno.com) (the JavaScript runtime yt-dlp
+needs for YouTube) into its data folder (`tools/`), checking both against their published SHA-256
+sums. yt-dlp updates itself at most once a day. It fetches the AAC (.m4a) or MP3 stream, so no
+ffmpeg: AAC is decoded to WAV with symphonia. Works on macOS, Windows and Linux (x86_64/arm64).
 The download test needs the network: `cargo test -p splitter -- --ignored download`.
 
 Generate a 60-minute test recording (tracks separated by 2 s gaps):
