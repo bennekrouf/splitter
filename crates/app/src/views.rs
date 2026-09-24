@@ -439,7 +439,10 @@ fn UrlDialog() -> Element {
         app.focus_root();
     };
     let go = move || {
-        if let Some(url) = app.url_dialog.peek().clone() {
+        // Take the text first: a guard held by the `if let` would still be alive when `close`
+        // writes the signal, which panics.
+        let url = app.url_dialog.peek().clone();
+        if let Some(url) = url {
             close();
             app.start_download(&url);
         }
