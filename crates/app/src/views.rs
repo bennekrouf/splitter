@@ -49,6 +49,16 @@ pub fn App() -> Element {
     let skips = use_memo(move || app.wanted_skips());
     use_effect(move || app.player().set_skips(skips()));
 
+    // Delayed and best-effort: a release check is never worth slowing a cold start, and a
+    // failed one is not worth mentioning.
+    let mut update = use_signal(|| Option::<crate::update_check::UpdateInfo>::None);
+    use_future(move || async move {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if let Some(info) = crate::update_check::check().await {
+            update.set(Some(info));
+        }
+    });
+
     let sidebar_width = (app.sidebar_width)();
     let sidebar_drag = app.sidebar_drag;
 
@@ -245,6 +255,18 @@ pub fn App() -> Element {
             main { class: "main", Editor {} }
             UrlDialog {}
             DeleteDialog {}
+        }
+        // Dismissed for this session only: the next launch asks again.
+        if let Some(info) = update() {
+            div { class: "update-banner",
+                span { class: "update-banner-text",
+                    "Splitter "
+                    strong { "{info.latest_version}" }
+                    " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
+                }
+                a { class: "update-banner-link", href: "{info.download_url}", target: "_blank", "Download" }
+                button { class: "update-banner-dismiss", title: "Dismiss", onclick: move |_| update.set(None), "×" }
+            }
         }
     }
 }

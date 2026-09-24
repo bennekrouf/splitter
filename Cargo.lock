@@ -4938,6 +4938,8 @@ dependencies = [
  "dirs",
  "image",
  "rfd 0.15.4",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "splitter-audio",
  "splitter-core",

@@ -8,6 +8,7 @@ mod exporting;
 mod review;
 mod state;
 mod tools;
+mod update_check;
 mod views;
 
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};

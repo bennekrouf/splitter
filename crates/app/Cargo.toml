@@ -12,6 +12,9 @@ tokio.workspace = true
 rfd.workspace = true
 crossbeam-channel.workspace = true
 dirs.workspace = true
+# Reads latest.json for the "new version available" banner.
+serde.workspace = true
+serde_json.workspace = true
 # Decodes assets/icon.png into the runtime window icon; png is the only format needed.
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Installing and updating yt-dlp and Deno for "Open URL" (download, verify, unzip).
