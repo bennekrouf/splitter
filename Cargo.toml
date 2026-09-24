@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/audio", "crates/app"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.2"
@@ -30,3 +31,8 @@ opt-level = 3
 
 [profile.dev.package.splitter-audio]
 opt-level = 3
+
+# block 0.1.6 (via dioxus-desktop -> cocoa) is unmaintained and trips a future-incompat lint;
+# vendor/block is the same release with that one type fixed.
+[patch.crates-io]
+block = { path = "vendor/block" }

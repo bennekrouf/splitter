@@ -18,6 +18,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 ureq = "3.4.2"
 sha2 = "0.11.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Deleting a recording from the file list moves it to the system Trash, so it can be restored.
+trash = "5.2"
 
 [dev-dependencies]
 symphonia.workspace = true

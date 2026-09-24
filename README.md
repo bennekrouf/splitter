@@ -18,6 +18,11 @@ cargo run -p splitter -- path/to/folder
 
 Or start without an argument and use **Open folder…** (⌘O).
 
+In the file list, **🗑** (on hover) moves a recording to the system Trash after a confirmation
+(Enter confirms, Esc cancels); its splits and titles are dropped, exported tracks are left
+alone. Drag the list's right edge to make it wider, or double-click the edge to fit the longest
+file name; the width is remembered.
+
 ### From a YouTube link
 
 **URL…** (⌘U) downloads a video's audio and opens it from `~/Music/Splitter/Downloads`. Nothing
@@ -58,6 +63,7 @@ cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min
 | ⌫ | delete the split, go to the next one still to review |
 | , / . | nudge the split 10 ms (⇧ 100 ms) |
 | S | snap the split to the quietest point within ±0.5 s |
+| G | keep the silence at the split (or under the playhead) in the export, or cut it again |
 | M | add a split at the playhead |
 | C | listen across the split again |
 | drag a marker | move a split |
@@ -69,15 +75,19 @@ cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min
 
 | Key | Action |
 |---|---|
-| T | type the current track's title (Enter saves and moves to the next, Esc cancels) |
-| X | leave the current track out of the export, or bring it back |
+| T | type the current track's title (Enter saves and moves to the next; Tab does too, and on an empty field accepts the suggested "Track N"; ⇧Tab goes back; Esc cancels). Titles show on the waveform at each track's start |
+| X | cut the current part (leave it out of the export), or bring it back |
+| R | rename the recording (✎ next to its name): the file on disk and its export folder |
 | A | A/B: loop 12 s from the playhead, then switch between original and the export format |
 | Esc | stop A/B |
 | F | flag the file to come back to |
 | ⌘E | export the kept tracks (queued) |
 | ⇧⌘E | export every file marked done |
 
-The *current track* is the one after the selected split, or the one under the playhead.
+The *current part* is highlighted in blue on the waveform ("Track N · X to cut"): right after
+**M** it's the part that mark closes, so **M** at 3:00, **M** at 4:00, **X** cuts 3:00–4:00.
+Otherwise it's the one after the selected split, or the one under the playhead. Cut parts are
+red and labelled "✂ cut"; X on one brings it back.
 **Paste tracklist…** takes one title per line (numbering, timestamps and durations are
 stripped) and gives them to the kept tracks in order.
 
@@ -86,6 +96,7 @@ stripped) and gives them to the kept tracks in order.
 | Key | Action |
 |---|---|
 | Space | play / pause |
+| P | **preview cuts**: play only what the export keeps, jumping over cut silence and left-out tracks |
 | ← / → | ±5 s (⇧ 0.5 s, ⌥ 10 ms) |
 | ↑ / ↓ | previous / next file |
 | + / − | zoom the detail view |
@@ -99,6 +110,28 @@ When a file is first analysed, silence detection suggests a split in the middle 
 stretch (below −45 dB for at least 1.5 s by default, ignoring lead-in/tail silence and keeping at
 least 30 s between suggestions). Both settings can be changed per file in the review bar;
 **Re-detect** replaces the unreviewed suggestions and keeps every confirmed split.
+
+Detection also tags every quiet stretch as *silence* (hatched red on the waveforms), including
+the lead-in and the tail. Where a silence touches a track's edge (around a split, or at the
+start/end of the recording) it is cut from the export by default: tracks start just before the
+music and stop just after it, keeping 0.25 s of the silence on each side so quiet attacks and
+decays survive. **G** keeps a silence (green) or cuts it again. Silence inside a track (a
+suggestion you deleted) is shown faintly and never cut, and a track that is nothing but cut
+silence is skipped. Splits don't move: only what gets exported changes, and the track list
+shows each track's length after the cut.
+
+To check the result by ear, turn on **Preview cuts** (P) and play from the start: you hear the
+exported tracks back to back, and nothing is written to disk. The player stops decoding at the
+start of each skipped part and jumps past it, so none of the skipped audio is played. Edits
+apply straight away, including while it plays.
+
+When it sounds right, **✂ Apply cuts** (top right) writes a copy without the cut parts,
+`live-set (cleaned).wav` next to the original, and opens it as a new entry in the file list. Its
+waveform and track list only show what was kept, with the splits already confirmed and the
+titles carried over. The original is never changed, so it's still in the list if you need it,
+and **⌘Z** right after applying removes the copy and goes back to the original. The copy is
+always WAV: a byte-for-byte copy of a WAV source, or the decoded audio of an MP3 as 16-bit PCM,
+because MP3 frames can't be cut out of the middle without clicks. That's about 600 MB per hour.
 
 All edits are saved to `splitter.cutlist.json` in the recordings folder, right after each change.
 Split positions are sample frames at the file's own rate, keyed by file name. The review loop

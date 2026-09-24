@@ -46,6 +46,18 @@ pub fn is_audio(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// `path` with its file name changed to `stem` (made safe for a file name), keeping the
+/// extension. `None` if nothing would change.
+pub fn renamed(path: &Path, stem: &str) -> Option<PathBuf> {
+    let stem = export::sanitize(stem);
+    let name = match path.extension() {
+        Some(ext) => format!("{stem}.{}", ext.to_string_lossy()),
+        None => stem,
+    };
+    let to = path.with_file_name(name);
+    (to != path).then_some(to)
+}
+
 /// All supported audio files directly inside `dir`, sorted by file name.
 pub fn list_recordings(dir: &Path) -> std::io::Result<Vec<Recording>> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
@@ -61,6 +73,14 @@ pub fn list_recordings(dir: &Path) -> std::io::Result<Vec<Recording>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renaming_keeps_the_extension_and_folder() {
+        let p = Path::new("/music/Live at the Roxy (Official Video).mp3");
+        assert_eq!(renamed(p, "Roxy 1976"), Some(PathBuf::from("/music/Roxy 1976.mp3")));
+        assert_eq!(renamed(p, " AC/DC: live "), Some(PathBuf::from("/music/AC_DC_ live.mp3")));
+        assert_eq!(renamed(p, "Live at the Roxy (Official Video)"), None);
+    }
 
     #[test]
     fn audio_extensions_are_case_insensitive() {
