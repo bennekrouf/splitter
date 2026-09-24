@@ -4931,7 +4931,7 @@ dependencies = [
 
 [[package]]
 name = "splitter"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "dioxus",
@@ -4953,7 +4953,7 @@ dependencies = [
 
 [[package]]
 name = "splitter-audio"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "bincode",
@@ -4970,7 +4970,7 @@ dependencies = [
 
 [[package]]
 name = "splitter-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
