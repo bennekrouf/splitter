@@ -1,11 +1,14 @@
 //! Open a recording from a URL (YouTube or anything else yt-dlp supports): yt-dlp downloads
 //! the audio stream, we convert it to WAV in the downloads folder, which then opens with the
-//! new file selected.
+//! new file selected. Or, when asked for the video, an MP4 with its sound, kept as is.
 //!
 //! yt-dlp and Deno are installed and kept up to date by `tools`; nothing else is needed.
 //! We ask for AAC (.m4a) or MP3 so no ffmpeg is involved: MP3 is kept as is, and AAC is decoded
 //! to WAV with symphonia. WAV keeps the rest of the app unchanged: it decodes and seeks exactly,
 //! and exporting as "Original" doesn't add a second lossy encode on top of the site's.
+//! For a video, picture (H.264, what every web view plays) and sound (AAC) are downloaded
+//! separately, as sites like YouTube serve them, and merged into one MP4 by ffmpeg (installed
+//! by `tools` on first use).
 
 use crate::state::App;
 use crate::tools;
@@ -24,6 +27,29 @@ const FILE: &str = "SPLITTER-FILE";
 /// Where downloads go: ~/Music/Splitter/Downloads.
 pub fn downloads_dir() -> PathBuf {
     dirs::audio_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).join("Splitter").join("Downloads")
+}
+
+/// What to download from a URL.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Kind {
+    /// The sound only, as WAV (or MP3).
+    #[default]
+    Audio,
+    /// Picture and sound, as one MP4.
+    Video,
+}
+
+impl Kind {
+    /// yt-dlp format selection: only formats symphonia decodes and the web view plays.
+    fn formats(self) -> &'static str {
+        match self {
+            Kind::Audio => "ba[ext=m4a]/ba[ext=mp3]",
+            // Separate picture and sound merged ("+"), or a file that already has both.
+            Kind::Video => {
+                "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+            }
+        }
+    }
 }
 
 enum Event {
@@ -51,7 +77,7 @@ pub struct Download {
 }
 
 impl Download {
-    fn start(url: &str, dir: &Path, tools_dir: &Path) -> Result<Self, String> {
+    fn start(url: &str, kind: Kind, dir: &Path, tools_dir: &Path) -> Result<Self, String> {
         let (tx, events) = crossbeam_channel::unbounded();
         let child = Arc::new(Mutex::new(None));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -60,7 +86,7 @@ impl Download {
         std::thread::Builder::new()
             .name("splitter-download".into())
             .spawn(move || {
-                let result = run(&url, &dir, &tools_dir, &c, &k, &tx);
+                let result = run(&url, kind, &dir, &tools_dir, &c, &k, &tx);
                 if !k.load(Ordering::SeqCst) {
                     let _ = tx.send(match result {
                         Ok(path) => Event::Done(path),
@@ -82,6 +108,7 @@ impl Download {
 
 fn run(
     url: &str,
+    kind: Kind,
     dir: &Path,
     tools_dir: &Path,
     child: &Mutex<Option<Child>>,
@@ -93,16 +120,26 @@ fn run(
     };
     let is_cancelled = || cancelled.load(Ordering::SeqCst);
     let tools = tools::ensure(tools_dir, &mut |p| phase(Phase::Installing(p)), &is_cancelled)?;
+    let ffmpeg = match kind {
+        Kind::Video => Some(tools::ensure_ffmpeg(tools_dir, &mut |p| phase(Phase::Installing(p)), &is_cancelled)?),
+        Kind::Audio => None,
+    };
     phase(Phase::Starting);
     std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
 
-    let mut spawned = tools::command(&tools.yt_dlp)
-        .arg("--ignore-config")
+    let mut cmd = tools::command(&tools.yt_dlp);
+    cmd.arg("--ignore-config")
         .args(["--no-playlist", "--newline", "--progress", "--no-colors"])
         .arg("--js-runtimes")
         .arg(format!("deno:{}", tools.deno.display()))
-        // Formats symphonia decodes; no ffmpeg to convert or fix up anything else.
-        .args(["-f", "ba[ext=m4a]/ba[ext=mp3]", "--fixup", "never"])
+        // Formats symphonia decodes (and, for a video, the web view plays).
+        .args(["-f", kind.formats()]);
+    match &ffmpeg {
+        Some(ffmpeg) => cmd.arg("--ffmpeg-location").arg(ffmpeg).args(["--merge-output-format", "mp4"]),
+        // No ffmpeg to convert or fix up anything.
+        None => cmd.args(["--fixup", "never"]),
+    };
+    let mut spawned = cmd
         .args([
             "--progress-template",
             &format!(
@@ -131,19 +168,19 @@ fn run(
         }
     }
 
-    let (file, errors) = read_output(stdout, stderr, tx);
+    let (files, errors) = read_output(stdout, stderr, tx);
     let status = child.lock().unwrap().take().and_then(|mut c| c.wait().ok());
     if is_cancelled() {
         return Err("cancelled".into());
     }
-    let file = match (file, status) {
-        (Some(path), Some(s)) if s.success() && path.is_file() => path,
-        _ if !errors.is_empty() => return Err(explain(&errors.join("\n"))),
+    let file = match (files.last(), status) {
+        (Some(path), Some(s)) if s.success() && path.is_file() => path.clone(),
+        _ if !errors.is_empty() => return Err(explain(&errors.join("\n"), kind)),
         (_, Some(s)) => return Err(format!("yt-dlp stopped ({s}) without producing a file")),
         (_, None) => return Err("yt-dlp stopped without producing a file".into()),
     };
-    if !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a")) {
-        return Ok(file); // MP3: the app plays and exports it directly
+    if kind == Kind::Video || !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a")) {
+        return Ok(file); // MP3 or a video: the app plays and exports it directly
     }
     phase(Phase::Converting(None));
     let wav = file.with_extension("wav");
@@ -153,12 +190,12 @@ fn run(
     Ok(wav)
 }
 
-/// Forward progress; returns the downloaded file and yt-dlp's error lines.
+/// Forward progress; returns the downloaded files, in order, and yt-dlp's error lines.
 fn read_output(
     stdout: impl Read + Send + 'static,
     stderr: impl Read + Send + 'static,
     tx: &Sender<Event>,
-) -> (Option<PathBuf>, Vec<String>) {
+) -> (Vec<PathBuf>, Vec<String>) {
     // Progress can come on either stream; errors come on stderr.
     let etx = tx.clone();
     let errors = std::thread::spawn(move || {
@@ -172,15 +209,15 @@ fn read_output(
         }
         errors
     });
-    let mut file = None;
+    let mut files = Vec::new();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Some(path) = line.strip_prefix(FILE).map(str::trim) {
-            file = Some(PathBuf::from(path));
+            files.push(PathBuf::from(path));
         } else if let Some(p) = parse_progress(&line) {
             let _ = tx.send(Event::Phase(p));
         }
     }
-    (file, errors.join().unwrap_or_default())
+    (files, errors.join().unwrap_or_default())
 }
 
 /// One of our progress lines, as a phase.
@@ -195,9 +232,12 @@ fn parse_progress(line: &str) -> Option<Phase> {
 }
 
 /// Add a hint to the errors people will actually hit.
-fn explain(err: &str) -> String {
+fn explain(err: &str, kind: Kind) -> String {
     let hint = if err.contains("Requested format is not available") {
-        " — this site offers no M4A or MP3 audio for it"
+        match kind {
+            Kind::Audio => " — this site offers no M4A or MP3 audio for it",
+            Kind::Video => " — this site offers no H.264 MP4 video for it; try Audio",
+        }
     } else if err.contains("Sign in to confirm") || err.contains("not a bot") || err.contains("HTTP Error 403") {
         " — YouTube is refusing this network for now; yt-dlp updates itself daily, so try again later"
     } else {
@@ -215,13 +255,13 @@ impl App {
         }
     }
 
-    pub fn start_download(mut self, url: &str) {
+    pub fn start_download(mut self, url: &str, kind: Kind) {
         let url = url.trim();
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             self.error.set(Some("That doesn't look like a link (it should start with https://)".into()));
             return;
         }
-        match Download::start(url, &downloads_dir(), &tools::dir()) {
+        match Download::start(url, kind, &downloads_dir(), &tools::dir()) {
             Ok(d) => self.download.set(Some(d)),
             Err(e) => self.error.set(Some(e)),
         }
@@ -289,7 +329,8 @@ mod tests {
     fn downloads_a_short_video() {
         let dir = std::env::temp_dir().join("splitter-download-test");
         let _ = std::fs::remove_dir_all(&dir);
-        let d = Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", &dir, &tools::dir()).unwrap();
+        let d =
+            Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", Kind::Audio, &dir, &tools::dir()).unwrap();
         let mut downloaded = false;
         loop {
             match d.events.recv_timeout(std::time::Duration::from_secs(300)).expect("timed out") {
@@ -303,6 +344,32 @@ mod tests {
                     let len = std::fs::metadata(&path).unwrap().len();
                     assert!((3_000_000..3_600_000).contains(&len), "{len} bytes");
                     assert!(!path.with_extension("m4a").exists());
+                    break;
+                }
+                Event::Failed(e) => panic!("{e}"),
+            }
+        }
+    }
+
+    /// Needs the network, like the audio one.
+    /// `cargo test -p splitter -- --ignored download`
+    #[test]
+    #[ignore]
+    fn downloads_a_short_video_as_one_mp4() {
+        let dir = std::env::temp_dir().join("splitter-download-video-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let d =
+            Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", Kind::Video, &dir, &tools::dir()).unwrap();
+        loop {
+            match d.events.recv_timeout(std::time::Duration::from_secs(300)).expect("timed out") {
+                Event::Phase(_) => {}
+                Event::Done(path) => {
+                    // One file with picture and sound, whose sound opens like any recording's.
+                    assert_eq!(path.extension().unwrap(), "mp4");
+                    let scan = splitter_audio::scan::scan(&path, &mut |_| {}).unwrap();
+                    assert_eq!(scan.info.codec, "AAC");
+                    assert!((18.0..20.0).contains(&scan.info.duration_secs()), "{}", scan.info.duration_secs());
+                    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "leftover parts");
                     break;
                 }
                 Event::Failed(e) => panic!("{e}"),

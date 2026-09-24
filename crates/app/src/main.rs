@@ -11,6 +11,7 @@ mod state;
 mod tools;
 mod update_check;
 mod video;
+mod video_export;
 mod views;
 
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};

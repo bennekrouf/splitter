@@ -8,6 +8,7 @@
 
 use crate::media_server;
 use crate::state::App;
+use crate::video_export::Timeline;
 use dioxus::prelude::*;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -72,6 +73,8 @@ struct Sent {
 pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
     let app = use_context::<App>();
     let url = use_hook(|| media_server::publish(&path));
+    // Our playhead counts the AAC priming the video's own timeline skips.
+    let timeline = use_hook(|| Timeline::of(&path, rate));
     let served = url.clone();
     use_drop(move || {
         if let Some(url) = &served {
@@ -88,7 +91,7 @@ pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
     });
 
     use_effect(move || {
-        let secs = (app.pos)() as f64 / rate as f64;
+        let secs = timeline.secs((app.pos)());
         let playing = (app.playing)();
         let loads = loads();
         let mut s = sent.borrow_mut();

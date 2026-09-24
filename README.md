@@ -1,8 +1,8 @@
 # Splitter
 
 Keyboard-driven tool for splitting long MP3/WAV recordings into tracks. Rust + Dioxus desktop.
-Videos (MP4, M4V, MOV with AAC audio) open too: they're split by their audio and exported as
-audio tracks.
+Videos (MP4, M4V, MOV with AAC audio) open too: they're split on their sound and exported as
+video clips.
 
 ## Layout
 
@@ -27,22 +27,46 @@ file name; the width is remembered.
 
 ### Videos
 
-MP4, M4V and MOV files are listed next to the recordings. Their audio track is scanned, played
-and split like any recording; the picture is ignored and tracks are exported as audio. The audio
-can't be copied out of a video as is, so **Original** exports FLAC for a video (the export bar
-says so), and the MP3 formats give smaller files. **Apply cuts** writes a WAV, as for an MP3.
-Only AAC-LC audio is supported (symphonia's decoder): HE-AAC and multichannel AAC, and MKV/WebM
-files, don't open yet.
+MP4, M4V and MOV files are listed next to the recordings. A file is split either as audio or as
+video, never both: a video shows its picture where a recording shows its overview waveform
+(click it to play or pause), and a plain timeline instead of the detail waveform, with the same
+splits, silences and track names. Its sound is scanned, played and split like any recording's
+(silence detection, review keys, preview cuts, loudness).
+
+The picture is played muted by the system's web view, from a small HTTP server on 127.0.0.1
+that serves only the selected file under a random token, and follows the audio player's
+playhead: the exact frame while paused, within a few tens of ms while playing. A web view that
+can't decode the video (e.g. HEVC on Windows without its extension, or Linux without
+GStreamer's H.264 plugin) shows a note; the sound works as usual.
+
+**Export** writes one MP4 clip per kept track (`live/01 - Intro.mp4`, …) with title, album and
+track number, cut exactly on the splits: the clips are re-encoded by ffmpeg (H.264 at high,
+standard or small quality, AAC 192 kbps), since a copy could only cut on keyframes, often seconds
+away. Loudness normalization applies to the sound. **Apply cuts** writes `live (cleaned).mp4`
+the same way. ffmpeg is fetched on first use (about 30 MB, SHA-256 checked, into the same
+`tools/` folder as yt-dlp): a static GPL build with x264, from
+[yt-dlp's builds](https://github.com/yt-dlp/FFmpeg-Builds) on Windows and
+[Martin Riedl's](https://ffmpeg.martin-riedl.de) on macOS and Linux; it's never bundled with the
+app.
+
+Symphonia decodes the AAC encoder's priming samples, which ffmpeg and the web views skip as the
+file's edit list says; `splitter_audio::mp4` reads that list so splits, the picture and the
+clips line up to the sample. Only AAC-LC sound is supported (symphonia's decoder): HE-AAC and
+multichannel AAC, and MKV/WebM files, don't open yet.
 
 ### From a YouTube link
 
-**URL…** (⌘U) downloads a video's audio and opens it from `~/Music/Splitter/Downloads`. Nothing
+**URL…** (⌘U) downloads a video's audio and opens it from `~/Music/Splitter/Downloads`. Pick
+**Video** in the dialog to get the video instead: picture (H.264, up to 1080p) and sound are
+downloaded separately, as YouTube serves them, and merged into one MP4 with ffmpeg. Nothing
 needs installing: on first use the app fetches [yt-dlp](https://github.com/yt-dlp/yt-dlp)'s
 standalone build (Python included) and [Deno](https://deno.com) (the JavaScript runtime yt-dlp
 needs for YouTube) into its data folder (`tools/`), checking both against their published SHA-256
-sums. yt-dlp updates itself at most once a day. It fetches the AAC (.m4a) or MP3 stream, so no
-ffmpeg: AAC is decoded to WAV with symphonia. Works on macOS, Windows and Linux (x86_64/arm64).
-The download test needs the network: `cargo test -p splitter -- --ignored download`.
+sums. yt-dlp updates itself at most once a day. For audio it fetches the AAC (.m4a) or MP3
+stream, so no ffmpeg: AAC is decoded to WAV with symphonia; a video download fetches ffmpeg
+first (see Videos). Works on macOS, Windows and Linux (x86_64/arm64).
+The download tests need the network: `cargo test -p splitter -- --ignored download`, and
+`--ignored ffmpeg` installs ffmpeg, after which the video export tests run against it.
 
 Generate a 60-minute test recording (tracks separated by 2 s gaps):
 

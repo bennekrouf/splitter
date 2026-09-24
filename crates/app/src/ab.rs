@@ -46,6 +46,10 @@ impl App {
             AbState::Preparing { .. } => return,
             _ => {}
         }
+        if self.selected_path().is_some_and(|p| splitter_core::is_video(&p)) {
+            self.error.set(Some("A/B compares audio formats; a video is exported as MP4 clips.".into()));
+            return;
+        }
         if profile == Profile::Original {
             self.error.set(Some(
                 "Pick an export format first: Original is the source itself, so there is nothing to compare.".into(),

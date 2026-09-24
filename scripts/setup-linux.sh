@@ -41,6 +41,12 @@ case "$DISTRO" in
     else
       skip "Runtime libs already installed"
     fi
+    # Video preview: WebKitGTK plays video through GStreamer (H.264 via libav). Optional.
+    if ! dpkg -l gstreamer1.0-libav &>/dev/null; then
+      info "Installing GStreamer plugins for the video preview..."
+      apt-get install -y gstreamer1.0-plugins-good gstreamer1.0-libav 2>/dev/null \
+        && ok "GStreamer plugins installed" || skip "GStreamer plugins not installed (no video preview)"
+    fi
     ;;
   fedora)
     if ! rpm -q webkit2gtk4.1 &>/dev/null && ! rpm -q webkit2gtk3 &>/dev/null; then
@@ -52,6 +58,10 @@ case "$DISTRO" in
     fi
     rpm -q xdotool &>/dev/null || dnf install -y xdotool
     rpm -q alsa-lib &>/dev/null || dnf install -y alsa-lib
+    # Video preview (optional): H.264 for GStreamer, which WebKitGTK plays video with.
+    rpm -q gstreamer1-plugin-openh264 &>/dev/null \
+      || dnf install -y gstreamer1-plugins-good gstreamer1-plugin-openh264 2>/dev/null \
+      || skip "GStreamer H.264 plugin not installed (no video preview)"
     ;;
   arch)
     if ! pacman -Qi webkit2gtk-4.1 &>/dev/null && ! pacman -Qi webkit2gtk &>/dev/null; then
@@ -63,6 +73,9 @@ case "$DISTRO" in
     fi
     pacman -Qi xdotool &>/dev/null || pacman -S --noconfirm xdotool
     pacman -Qi alsa-lib &>/dev/null || pacman -S --noconfirm alsa-lib
+    # Video preview (optional): WebKitGTK plays video through GStreamer.
+    pacman -Qi gst-libav &>/dev/null || pacman -S --noconfirm gst-plugins-good gst-libav \
+      || skip "GStreamer plugins not installed (no video preview)"
     ;;
 esac
 
