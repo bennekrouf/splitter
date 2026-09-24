@@ -542,6 +542,9 @@ jobs:
           LINUX_TGZ="splitter-linux-x86_64.tar.gz"
 
           sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
+          # Empty when that platform's build failed, so the in-app update banner
+          # falls back to the apps page instead of linking to a 404.
+          url() { [ -n "$1" ] && [ -f "release/$1" ] && echo "$BASE/$1" || echo ""; }
 
           cat > release/latest.json <<EOF
           {
@@ -550,9 +553,9 @@ jobs:
             "tag": "$TAG",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
-              "macos":   { "dmg":    { "url": "$BASE/$MAC_DMG",   "sha256": "$(sha "$MAC_DMG")"   } },
-              "windows": { "exe_or_msi": { "url": "$BASE/$WIN_EXE", "sha256": "$(sha "$WIN_EXE")" } },
-              "linux":   { "tarball": { "url": "$BASE/$LINUX_TGZ", "sha256": "$(sha "$LINUX_TGZ")" } }
+              "macos":   { "dmg":    { "url": "$(url "$MAC_DMG")",   "sha256": "$(sha "$MAC_DMG")"   } },
+              "windows": { "exe_or_msi": { "url": "$(url "$WIN_EXE")", "sha256": "$(sha "$WIN_EXE")" } },
+              "linux":   { "tarball": { "url": "$(url "$LINUX_TGZ")", "sha256": "$(sha "$LINUX_TGZ")" } }
             }
           }
           EOF

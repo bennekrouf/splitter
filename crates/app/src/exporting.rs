@@ -4,9 +4,9 @@
 use crate::state::{key_of, App, ScanState};
 use crossbeam_channel::{Receiver, Sender};
 use dioxus::prelude::*;
-use splitter_audio::export::{export, ExportJob, Tags};
+use splitter_audio::export::{can_copy, export, ExportJob, Tags};
 use splitter_audio::loudness::{apply_to_jobs, load_or_analyze, LoudnessMap};
-use splitter_audio::{Bitrate, Scan, SourceInfo};
+use splitter_audio::{Bitrate, Scan};
 use splitter_core::export::{plan, Normalize, Profile, SourceFacts};
 use splitter_core::Status;
 use std::path::{Path, PathBuf};
@@ -142,7 +142,8 @@ impl App {
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let src_ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "mp3".into());
         let settings = self.cutlist.peek().export.clone();
-        let ext = settings.profile.extension(&src_ext).to_string();
+        let profile = settings.profile.effective(&source_facts(&path, &scan));
+        let ext = profile.extension(&src_ext).to_string();
         let planned = match self.cutlist.peek().recordings.get(&key) {
             Some(edit) => plan(edit, scan.info.total_samples, &stem, &settings),
             None => plan(&Default::default(), scan.info.total_samples, &stem, &settings),
@@ -176,7 +177,7 @@ impl App {
             scan,
             jobs,
             dir,
-            profile: settings.profile,
+            profile,
             normalize: settings.normalize,
         };
         if exporter.tx.send(task).is_ok() {
@@ -277,12 +278,20 @@ impl App {
 }
 
 /// What the size estimate and warnings need from a scan.
-pub fn source_facts(info: &SourceInfo, lossy: bool) -> SourceFacts {
+pub fn source_facts(path: &Path, scan: &Scan) -> SourceFacts {
+    let info = &scan.info;
     let (kbps, bits) = match info.bitrate {
-        Bitrate::Cbr(k) => (k, None),
+        Bitrate::Cbr(k) | Bitrate::Avg(k) => (k, None),
         Bitrate::Vbr { avg, .. } => (avg, None),
         Bitrate::Pcm { bits, kbps } => (kbps, Some(bits)),
         Bitrate::Unknown => ((info.file_size as f64 * 8.0 / 1000.0 / info.duration_secs().max(1.0)) as u32, None),
     };
-    SourceFacts { lossy, kbps, sample_rate: info.sample_rate, channels: info.channels, bits }
+    SourceFacts {
+        lossy: bits.is_none(),
+        copyable: can_copy(path, scan),
+        kbps,
+        sample_rate: info.sample_rate,
+        channels: info.channels,
+        bits,
+    }
 }

@@ -1,6 +1,6 @@
 //! App state and the actions the UI and keyboard trigger.
 
-use crate::exporting::{ExportStatus, Exporter};
+use crate::exporting::{export_dir_of, ExportStatus, Exporter};
 use dioxus::prelude::*;
 use splitter_audio::loudness::LoudnessMap;
 use splitter_audio::{Player, Scan, ScanEvent, Scanner};
@@ -54,10 +54,27 @@ pub struct App {
     pub history: Signal<HashMap<String, History>>,
     /// Index of the split being reviewed in the current recording.
     pub cur_split: Signal<Option<usize>>,
+    /// The part M just closed (the track ending at the new split): X and T act on it, so
+    /// M at 3:00, M at 4:00, X cuts 3:00–4:00. Cleared when another split is selected.
+    pub closed_track: Signal<Option<usize>>,
     /// The edit as it was when a marker drag started (for a single undo step).
     pub drag: Signal<Option<Snapshot>>,
     /// Track whose title is being typed.
     pub editing_title: Signal<Option<usize>>,
+    /// The recording's file name is being typed.
+    pub renaming: Signal<bool>,
+    /// Play only what the export keeps: jump over cut silence and left-out tracks.
+    pub preview: Signal<bool>,
+    /// Recording waiting for the user to confirm moving it to the Trash.
+    pub confirm_delete: Signal<Option<PathBuf>>,
+    /// Width of the file list in px (drag its right edge; kept between runs).
+    pub sidebar_width: Signal<f64>,
+    /// The file list's edge is being dragged.
+    pub sidebar_drag: Signal<bool>,
+    /// A cleaned copy being written by Apply cuts.
+    pub applying: Signal<Option<crate::cleaning::Applying>>,
+    /// The last copy Apply cuts made, as (original, copy), so ⌘Z can take it back.
+    pub last_apply: Signal<Option<(PathBuf, PathBuf)>>,
     /// Text of the "paste tracklist" dialog while it's open.
     pub paste: Signal<Option<String>>,
     pub exporter: Signal<Exporter>,
@@ -96,8 +113,16 @@ impl App {
             cut_dirty: Signal::new(None),
             history: Signal::new(HashMap::new()),
             cur_split: Signal::new(None),
+            closed_track: Signal::new(None),
             drag: Signal::new(None),
             editing_title: Signal::new(None),
+            renaming: Signal::new(false),
+            preview: Signal::new(false),
+            confirm_delete: Signal::new(None),
+            sidebar_width: Signal::new(prefs::sidebar_width().unwrap_or(280.0)),
+            sidebar_drag: Signal::new(false),
+            applying: Signal::new(None),
+            last_apply: Signal::new(None),
             paste: Signal::new(None),
             exporter: Signal::new(Exporter::spawn()),
             exports: Signal::new(HashMap::new()),
@@ -181,8 +206,10 @@ impl App {
         self.selected.set(Some(i));
         self.ab_stop();
         self.cur_split.set(None);
+        self.closed_track.set(None);
         self.drag.set(None);
         self.editing_title.set(None);
+        self.renaming.set(false);
         self.paste.set(None);
         self.player().unload();
         self.pos.set(0);
@@ -211,6 +238,185 @@ impl App {
             Some(ScanState::Failed(_)) => {}
             _ => self.scanner.peek().prioritize(path),
         }
+    }
+
+    /// Rename the current recording on disk, and its export folder if there is one. Its edits,
+    /// history, scan and loudness move to the new name. Returns false (with an error shown) if
+    /// the rename can't be done.
+    pub fn rename_recording(mut self, stem: &str) -> bool {
+        let Some(i) = *self.selected.peek() else { return false };
+        let Some(from) = self.selected_path() else { return false };
+        let Some(to) = splitter_core::renamed(&from, stem) else { return true };
+        let (old_key, new_key) = (key_of(&from), key_of(&to));
+        let fail = |mut app: Self, msg: String| {
+            app.error.set(Some(msg));
+            false
+        };
+        if self.exports.peek().get(&old_key).is_some_and(|s| s.is_active()) {
+            return fail(self, "Wait for the export to finish before renaming.".into());
+        }
+        // A case-only change is the same file on case-insensitive disks, so compare keys.
+        let taken = |a: &Path, b: &Path| b.exists() && key_of(a).to_lowercase() != key_of(b).to_lowercase();
+        if taken(&from, &to) {
+            return fail(self, format!("There is already a file named “{new_key}”."));
+        }
+        let dirs = export_dir_of(&from).zip(export_dir_of(&to)).filter(|(a, _)| a.is_dir());
+        if let Some((a, b)) = &dirs {
+            if taken(a, b) {
+                return fail(self, format!("There is already a folder named “{}”.", key_of(b)));
+            }
+        }
+
+        self.ab_stop();
+        self.player().unload();
+        if let Err(e) = std::fs::rename(&from, &to) {
+            return fail(self, format!("Could not rename the file: {e}"));
+        }
+        if let Some((a, b)) = dirs {
+            if let Err(e) = std::fs::rename(&a, &b) {
+                self.error.set(Some(format!("Renamed the file, but not its export folder: {e}")));
+            }
+        }
+
+        // Move everything keyed by the old path or name.
+        {
+            let mut cl = self.cutlist.write();
+            if let Some(edit) = cl.recordings.remove(&old_key) {
+                cl.recordings.insert(new_key.clone(), edit);
+            }
+        }
+        rekey(&mut self.history.write(), &old_key, new_key.clone());
+        rekey(&mut self.exports.write(), &old_key, new_key);
+        let scan = self.scans.peek().get(&from).cloned();
+        rekey(&mut self.scans.write(), &from, to.clone());
+        let measured = rekey(&mut self.loudness.write(), &from, to.clone());
+        if let (false, Some(ScanState::Ready(scan))) = (measured, &scan) {
+            // Its measurement may still be running under the old name: measure again.
+            self.scanner.peek().prioritize_loudness(to.clone(), scan.clone());
+        }
+        {
+            let mut recs = self.recordings.write();
+            recs[i].path = to.clone();
+            recs.sort_by_key(|r| r.path.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+            let j = recs.iter().position(|r| r.path == to).unwrap_or(i);
+            self.selected.set(Some(j));
+        }
+        match scan {
+            Some(ScanState::Ready(scan)) => self.load(&to, &scan),
+            _ => self.scanner.peek().prioritize(to),
+        }
+        self.pos.set(0);
+        self.mark_dirty();
+        self.save_now();
+        true
+    }
+
+    /// P: hear the recording as exported (cut silence and left-out tracks skipped), or all of it.
+    pub fn toggle_preview(mut self) {
+        let on = !*self.preview.peek();
+        self.preview.set(on);
+    }
+
+    /// What the player should skip: nothing, or (in preview) what the current export leaves out.
+    /// Reads signals, so a memo over it follows the toggle, the selection and every edit.
+    pub fn wanted_skips(self) -> Vec<(u64, u64)> {
+        let on = (self.preview)();
+        let _ = self.selected.read();
+        let key = self.selected_path().map(|p| key_of(&p));
+        match (on, key) {
+            (true, Some(k)) => self.cutlist.read().recordings.get(&k).map(|e| e.skipped(u64::MAX)).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Re-read the folder's recordings (a file was added or removed) and select `path`.
+    pub(crate) fn refresh_recordings(mut self, path: &Path) {
+        let Some(dir) = self.folder.peek().clone() else { return };
+        let recordings = match list_recordings(&dir) {
+            Ok(r) => r,
+            Err(e) => {
+                self.error.set(Some(format!("Could not read {}: {e}", dir.display())));
+                return;
+            }
+        };
+        let pending: Vec<PathBuf> = {
+            let scans = self.scans.peek();
+            recordings
+                .iter()
+                .map(|r| r.path.clone())
+                .filter(|p| !matches!(scans.get(p), Some(ScanState::Ready(_))))
+                .collect()
+        };
+        self.scanner.peek().set_queue(pending);
+        let i = recordings.iter().position(|r| r.path == path).unwrap_or(0);
+        self.recordings.set(recordings);
+        // `select` ignores the index it's already on, which may now be a different file.
+        self.selected.set(None);
+        self.select(i);
+    }
+
+    /// Move a recording to the system Trash (so it can be restored from there) and forget its
+    /// edits. Its export folder is left alone. The next file is selected if it was the current one.
+    pub fn delete_recording(mut self, path: &Path) {
+        let key = key_of(path);
+        if self.exports.peek().get(&key).is_some_and(|s| s.is_active()) {
+            self.error.set(Some("Wait for the export to finish before deleting.".into()));
+            return;
+        }
+        if self.applying.peek().is_some() {
+            self.error.set(Some("Wait for Apply cuts to finish before deleting.".into()));
+            return;
+        }
+        let was_selected = self.selected_path().as_deref() == Some(path);
+        if was_selected {
+            self.ab_stop();
+            self.player().unload();
+        }
+        if let Err(e) = move_to_trash(path) {
+            self.error.set(Some(format!("Could not move {key} to the Trash: {e}")));
+            return;
+        }
+        self.cutlist.write().recordings.remove(&key);
+        self.history.write().remove(&key);
+        self.exports.write().remove(&key);
+        self.scans.write().remove(path);
+        self.loudness.write().remove(path);
+        if self.last_apply.peek().as_ref().is_some_and(|(a, b)| a == path || b == path) {
+            self.last_apply.set(None);
+        }
+        self.mark_dirty();
+        self.save_now();
+        // Stay on the current file, or move to the one that took the deleted one's place.
+        let next = {
+            let recs = self.recordings.peek();
+            let i = recs.iter().position(|r| r.path == path).unwrap_or(0);
+            let keep = if was_selected { recs.get(i + 1).or(i.checked_sub(1).and_then(|j| recs.get(j))) } else { None };
+            keep.map(|r| r.path.clone()).or_else(|| if was_selected { None } else { self.selected_path() })
+        };
+        match next {
+            Some(p) => self.refresh_recordings(&p),
+            None => {
+                self.refresh_recordings(path);
+                self.selected.set(None);
+            }
+        }
+    }
+
+    /// Set the file list's width while dragging its edge (and remember it when done).
+    pub fn set_sidebar_width(mut self, px: f64, done: bool) {
+        let w = px.clamp(180.0, 900.0);
+        self.sidebar_width.set(w);
+        if done {
+            self.sidebar_drag.set(false);
+            prefs::remember_sidebar_width(w);
+        }
+    }
+
+    /// Double-click on the file list's edge: wide enough for the longest file name.
+    pub fn fit_sidebar(self) {
+        let longest = self.recordings.peek().iter().map(|r| r.name().chars().count()).max().unwrap_or(20);
+        // ~7 px per character at 13 px, plus the status dot, the details and the trash button.
+        self.set_sidebar_width(longest as f64 * 7.2 + 150.0, true);
     }
 
     /// F: flag the current recording to come back to (or unflag it).
@@ -368,6 +574,7 @@ impl App {
         self.fade_error();
         self.poll_ab();
         self.poll_download();
+        self.poll_apply();
         if self.cut_dirty.peek().is_some_and(|t| t.elapsed() > Duration::from_millis(400)) {
             self.save_now();
         }
@@ -397,6 +604,25 @@ impl App {
     }
 }
 
+/// Move a file to the system Trash. On macOS through the file manager API rather than by
+/// scripting Finder, which would ask the user for permission to control Finder (the file can
+/// still be dragged back out of the Trash, just not "Put Back").
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[allow(unused_mut)]
+    let mut ctx = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    ctx.delete(path)
+}
+
+/// Move `map[from]` to `to`. Returns whether there was an entry.
+fn rekey<K: std::hash::Hash + Eq, V>(map: &mut HashMap<K, V>, from: &K, to: K) -> bool {
+    map.remove(from).map(|v| map.insert(to, v)).is_some()
+}
+
 /// Cutlist key for a recording: its file name, so the folder can be moved or renamed.
 pub fn key_of(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
@@ -415,6 +641,21 @@ pub mod prefs {
             let _ = std::fs::create_dir_all(f.parent().unwrap());
             let _ = std::fs::write(f, dir.to_string_lossy().as_bytes());
         }
+    }
+
+    fn width_file() -> Option<PathBuf> {
+        Some(dirs::config_dir()?.join("splitter").join("sidebar-width"))
+    }
+
+    pub fn remember_sidebar_width(px: f64) {
+        if let Some(f) = width_file() {
+            let _ = std::fs::create_dir_all(f.parent().unwrap());
+            let _ = std::fs::write(f, format!("{px:.0}"));
+        }
+    }
+
+    pub fn sidebar_width() -> Option<f64> {
+        std::fs::read_to_string(width_file()?).ok()?.trim().parse().ok()
     }
 
     /// The folder open when the app last closed, if it still exists.

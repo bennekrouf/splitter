@@ -2,11 +2,13 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod ab;
+mod cleaning;
 mod download;
 mod exporting;
 mod review;
 mod state;
 mod tools;
+mod update_check;
 mod views;
 
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};

@@ -5,8 +5,9 @@
 //! splits. MP3 output carries LAME's own gapless header, so players trim it back to exactly the
 //! track's samples.
 
-use crate::export::{id3v2, Tags};
-use crate::source::{GenericSource, PcmSource};
+use crate::export::{id3v2, Tags, WavLayout};
+use crate::scan::Scan;
+use crate::source::{open_source, GenericSource, PcmSource};
 use anyhow::{anyhow, bail, Context, Result};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
@@ -16,6 +17,7 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::num::NonZeroU32;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Sample rates MP3 can carry; anything else is resampled by LAME.
 const MP3_RATES: [u32; 9] = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
@@ -401,6 +403,85 @@ pub fn decode_to_wav(src: &Path, dst: &Path, progress: &mut dyn FnMut(f32)) -> R
     wav16_header(&mut file, ch, rate, frames * ch as u64 * 2)?;
     file.sync_all()?;
     drop(file);
+    std::fs::rename(&tmp, dst).with_context(|| format!("renaming to {}", dst.display()))
+}
+
+/// Write the `ranges` (source frames, sorted) of a recording back to back into a new WAV at
+/// `dst`: a lossless byte copy for a WAV source, 16-bit PCM decoded from anything else (MP3).
+/// Written to a temporary name first, so a half-written file never shows up as a recording.
+pub fn write_ranges_to_wav(
+    path: &Path,
+    scan: &Scan,
+    ranges: &[(u64, u64)],
+    dst: &Path,
+    progress: &mut dyn FnMut(f32),
+) -> Result<()> {
+    let total: u64 = ranges.iter().map(|(a, b)| b - a).sum();
+    if total == 0 {
+        bail!("nothing to keep");
+    }
+    let tmp = dst.with_extension("wav.part");
+    let result = (|| {
+        let mut out = BufWriter::new(File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?);
+        let mut done = 0u64;
+        let mut step = |n: u64| {
+            done += n;
+            progress((done as f64 / total as f64) as f32);
+        };
+        let mut src = File::open(path)?;
+        match WavLayout::read(&mut src).ok().filter(|_| scan.mp3.is_none()) {
+            Some(l) => {
+                let len = total * l.block_align;
+                let fmt_len = l.fmt.len() as u64;
+                let riff_len = 4 + (8 + fmt_len + (fmt_len & 1)) + (8 + len + (len & 1));
+                if riff_len > u32::MAX as u64 {
+                    bail!("the result is larger than 4 GB, which WAV can't hold");
+                }
+                out.write_all(b"RIFF")?;
+                out.write_all(&(riff_len as u32).to_le_bytes())?;
+                out.write_all(b"WAVEfmt ")?;
+                out.write_all(&(fmt_len as u32).to_le_bytes())?;
+                out.write_all(&l.fmt)?;
+                if fmt_len & 1 == 1 {
+                    out.write_all(&[0])?;
+                }
+                out.write_all(b"data")?;
+                out.write_all(&(len as u32).to_le_bytes())?;
+                let frames = l.data_len / l.block_align;
+                for &(a, b) in ranges {
+                    let (a, b) = (a.min(frames), b.min(frames));
+                    src.seek(SeekFrom::Start(l.data_offset + a * l.block_align))?;
+                    std::io::copy(&mut std::io::Read::take(&mut src, (b - a) * l.block_align), &mut out)?;
+                    step(b - a);
+                }
+                if len & 1 == 1 {
+                    out.write_all(&[0])?;
+                }
+            }
+            None => {
+                let mut source = open_source(path, scan.mp3.clone().map(Arc::new))?;
+                let ch = source.channels() as u32;
+                wav16_header(&mut out, ch, source.sample_rate(), total * ch as u64 * 2)?;
+                let mut bytes = Vec::with_capacity(16384);
+                for &(a, b) in ranges {
+                    read_range(source.as_mut(), a, b, |chunk| {
+                        bytes.clear();
+                        bytes.extend(chunk.iter().flat_map(|&x| (to_int(x, 16) as i16).to_le_bytes()));
+                        out.write_all(&bytes).context("writing WAV")?;
+                        step((chunk.len() / ch as usize) as u64);
+                        Ok(())
+                    })?;
+                }
+            }
+        }
+        let file = out.into_inner().map_err(|e| e.into_error())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     std::fs::rename(&tmp, dst).with_context(|| format!("renaming to {}", dst.display()))
 }
 

@@ -2,6 +2,7 @@ use crate::ab::AbState;
 use crate::download::Phase;
 use crate::exporting::source_facts;
 use crate::exporting::ExportStatus;
+use crate::review;
 use crate::state::{self, key_of, ScanState};
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
@@ -43,8 +44,31 @@ pub fn App() -> Element {
         }
     });
 
+    // Re-send the preview's skipped ranges only when they actually change (a marker drag
+    // writes the cutlist on every mouse move).
+    let skips = use_memo(move || app.wanted_skips());
+    use_effect(move || app.player().set_skips(skips()));
+
+    // Delayed and best-effort: a release check is never worth slowing a cold start, and a
+    // failed one is not worth mentioning.
+    let mut update = use_signal(|| Option::<crate::update_check::UpdateInfo>::None);
+    use_future(move || async move {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if let Some(info) = crate::update_check::check().await {
+            update.set(Some(info));
+        }
+    });
+
+    let sidebar_width = (app.sidebar_width)();
+    let sidebar_drag = app.sidebar_drag;
+
     let onkeydown = move |e: KeyboardEvent| {
-        if app.paste.peek().is_some() || app.editing_title.peek().is_some() || app.url_dialog.peek().is_some() {
+        if app.paste.peek().is_some()
+            || app.editing_title.peek().is_some()
+            || app.url_dialog.peek().is_some()
+            || *app.renaming.peek()
+            || app.confirm_delete.peek().is_some()
+        {
             return; // a text field has the keyboard
         }
         let m = e.modifiers();
@@ -157,6 +181,15 @@ pub fn App() -> Element {
                 app.toggle_drop(None);
                 true
             }
+            Code::KeyP if !cmd => {
+                app.toggle_preview();
+                true
+            }
+            Code::KeyR if !cmd => {
+                let mut renaming = app.renaming;
+                renaming.set(true);
+                true
+            }
             Code::KeyG if !cmd => {
                 app.toggle_silence();
                 true
@@ -181,8 +214,9 @@ pub fn App() -> Element {
                 if *app.ab.peek() != AbState::Off {
                     app.ab_stop();
                 } else {
-                    let mut cur = app.cur_split;
+                    let (mut cur, mut closed) = (app.cur_split, app.closed_track);
                     cur.set(None);
+                    closed.set(None);
                 }
                 true
             }
@@ -196,9 +230,22 @@ pub fn App() -> Element {
     rsx! {
         style { {CSS} }
         div {
-            class: "app",
+            class: if sidebar_drag() { "app resizing" } else { "app" },
+            style: "grid-template-columns: {sidebar_width}px 1fr",
             tabindex: "0",
             onkeydown,
+            // Dragging the file list's edge: follow the mouse anywhere in the window.
+            onmousemove: move |e| {
+                if sidebar_drag() {
+                    let held = e.held_buttons().contains(MouseButton::Primary);
+                    app.set_sidebar_width(e.client_coordinates().x, !held);
+                }
+            },
+            onmouseup: move |e| {
+                if sidebar_drag() {
+                    app.set_sidebar_width(e.client_coordinates().x, true);
+                }
+            },
             onmounted: move |e| {
                 let mut root = app.root;
                 root.set(Some(e.data()));
@@ -207,6 +254,19 @@ pub fn App() -> Element {
             Sidebar {}
             main { class: "main", Editor {} }
             UrlDialog {}
+            DeleteDialog {}
+        }
+        // Dismissed for this session only: the next launch asks again.
+        if let Some(info) = update() {
+            div { class: "update-banner",
+                span { class: "update-banner-text",
+                    "Splitter "
+                    strong { "{info.latest_version}" }
+                    " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
+                }
+                a { class: "update-banner-link", href: "{info.download_url}", target: "_blank", "Download" }
+                button { class: "update-banner-dismiss", title: "Dismiss", onclick: move |_| update.set(None), "×" }
+            }
         }
     }
 }
@@ -250,6 +310,16 @@ fn Sidebar() -> Element {
 
     rsx! {
         aside { class: "sidebar",
+            div {
+                class: "sidebar-edge",
+                title: "Drag to resize · double-click to fit the longest name",
+                onmousedown: move |e| {
+                    e.prevent_default();
+                    let mut drag = app.sidebar_drag;
+                    drag.set(true);
+                },
+                ondoubleclick: move |_| app.fit_sidebar(),
+            }
             div { class: "sidebar-head",
                 span { class: "brand", "Splitter" }
                 div { class: "head-actions",
@@ -286,6 +356,21 @@ fn Sidebar() -> Element {
                                 onclick: move |_| app.select(i),
                                 span { class: "{dot}", title: "{dot_title}" }
                                 span { class: "item-name", title: "{rec.name()}", "{rec.name()}" }
+                                {
+                                    let path = rec.path.clone();
+                                    rsx! {
+                                        button {
+                                            class: "item-trash",
+                                            title: "Move to the Trash…",
+                                            onclick: move |e| {
+                                                e.stop_propagation();
+                                                let mut confirm = app.confirm_delete;
+                                                confirm.set(Some(path.clone()));
+                                            },
+                                            "🗑"
+                                        }
+                                    }
+                                }
                                 match (export, scans.get(&rec.path)) {
                                     (Some(ExportStatus::Queued), _) => rsx! { span { class: "item-meta busy", "queued" } },
                                     (Some(ExportStatus::Measuring), _) => rsx! { span { class: "item-meta busy", "measuring…" } },
@@ -314,7 +399,7 @@ fn Sidebar() -> Element {
                 }
             }
             if recordings.is_empty() {
-                div { class: "hint", "Open a folder containing MP3 or WAV recordings (⌘O), or a YouTube link (⌘U)." }
+                div { class: "hint", "Open a folder containing MP3 or WAV recordings, or MP4/MOV videos (⌘O), or a YouTube link (⌘U)." }
             }
             div { class: "sidebar-foot",
                 if active > 0 {
@@ -382,10 +467,153 @@ fn Editor() -> Element {
     };
 
     rsx! {
-        h1 { class: "title", "{rec.name()}" }
+        FileName { key: "{rec.name()}", path: rec.path.clone() }
         {body}
         ErrorBanner {}
         Keys {}
+    }
+}
+
+/// The recording's name. ✎ (or R) renames the file, and with it the export folder.
+#[component]
+fn FileName(path: std::path::PathBuf) -> Element {
+    let app = use_context::<state::App>();
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let mut draft = use_signal(|| stem.clone());
+    let mut renaming = app.renaming;
+    let original = use_signal(|| stem.clone());
+    let mut close = move |save: bool| {
+        if !*renaming.peek() {
+            return;
+        }
+        renaming.set(false);
+        let name = draft.peek().clone();
+        // Start from the current name next time (after a rename this component is remounted).
+        draft.set(original.peek().clone());
+        if save && !name.trim().is_empty() {
+            app.rename_recording(&name);
+        }
+        app.focus_root();
+    };
+    if !renaming() {
+        return rsx! {
+            div { class: "file-name",
+                h1 { class: "title", "{stem}" span { class: "dim", "{ext}" } }
+                button {
+                    class: "rename",
+                    title: "Rename the file and its export folder (R)",
+                    onclick: move |_| renaming.set(true),
+                    "✎"
+                }
+                span { class: "spacer" }
+                ApplyCuts {}
+            }
+        };
+    }
+    rsx! {
+        div { class: "file-name",
+            input {
+                class: "title-input name-input",
+                value: "{draft}",
+                onmounted: move |e| async move {
+                    let _ = e.set_focus(true).await;
+                },
+                oninput: move |e| draft.set(e.value()),
+                onkeydown: move |e| {
+                    e.stop_propagation();
+                    match e.key() {
+                        Key::Enter => close(true),
+                        Key::Escape => close(false),
+                        _ => {}
+                    }
+                },
+                onblur: move |_| close(true),
+            }
+            span { class: "dim", "{ext}" }
+            span { class: "dim hint", "Enter renames the file and its export folder · Esc cancels" }
+        }
+    }
+}
+
+/// Write a copy without the cut parts; it opens as a new entry and the original stays.
+#[component]
+fn ApplyCuts() -> Element {
+    let app = use_context::<state::App>();
+    // Subscribe to what `can_apply_cuts` peeks at.
+    let _ = (app.cutlist.read(), app.scans.read(), app.selected.read());
+    if let Some(a) = app.applying.read().as_ref() {
+        let pct = (a.progress * 100.0) as u32;
+        return rsx! {
+            span { class: "applying dim", "Applying cuts… {pct}%" }
+            div { class: "progress small", div { style: "width: {pct}%" } }
+        };
+    }
+    let can = app.can_apply_cuts();
+    rsx! {
+        button {
+            class: "primary",
+            disabled: !can,
+            title: if can {
+                "Save a copy without the cut silence and left-out tracks, and open it. The original stays; ⌘Z right after removes the copy."
+            } else {
+                "Nothing is cut in this recording"
+            },
+            onclick: move |_| app.apply_cuts(),
+            "✂ Apply cuts"
+        }
+    }
+}
+
+/// "Move to the Trash?" for a recording in the file list. Enter confirms, Esc cancels.
+#[component]
+fn DeleteDialog() -> Element {
+    let app = use_context::<state::App>();
+    let Some(path) = (app.confirm_delete)() else { return rsx! {} };
+    let name = key_of(&path);
+    let edits = app.cutlist.read().recordings.get(&name).is_some_and(|e| !e.splits.is_empty());
+    let close = move || {
+        let mut confirm = app.confirm_delete;
+        confirm.set(None);
+        app.focus_root();
+    };
+    let confirm = move || {
+        let target = app.confirm_delete.peek().clone();
+        close();
+        if let Some(p) = target {
+            app.delete_recording(&p);
+        }
+    };
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| close(),
+            div {
+                class: "modal",
+                tabindex: "0",
+                onclick: move |e| e.stop_propagation(),
+                onmounted: move |e| async move {
+                    let _ = e.set_focus(true).await;
+                },
+                onkeydown: move |e| {
+                    e.stop_propagation();
+                    match e.key() {
+                        Key::Enter => confirm(),
+                        Key::Escape => close(),
+                        _ => {}
+                    }
+                },
+                h2 { "Move to the Trash?" }
+                p { class: "delete-name", "{name}" }
+                p { class: "dim",
+                    "The file goes to the system Trash, so you can still restore it from there."
+                    if edits { " Its splits and titles in Splitter are removed." }
+                    " Tracks you already exported are not touched."
+                }
+                div { class: "modal-actions",
+                    button { onclick: move |_| close(), "Cancel" kbd { "Esc" } }
+                    button { class: "danger", onclick: move |_| confirm(), "Move to Trash" kbd { "Enter" } }
+                }
+            }
+        }
     }
 }
 
@@ -500,6 +728,7 @@ fn Info(scan: ScanRef) -> Element {
         Bitrate::Cbr(k) => format!("CBR {k} kbps"),
         Bitrate::Vbr { min, avg, max } => format!("VBR {min}–{max} kbps (avg {avg})"),
         Bitrate::Pcm { kbps, .. } => format!("{kbps} kbps"),
+        Bitrate::Avg(k) => format!("~{k} kbps"),
         Bitrate::Unknown => "bitrate unknown".into(),
     };
     let channels = match i.channels {
@@ -586,12 +815,49 @@ fn Markers(start: u64, end: u64, detail: bool) -> Element {
                     class.push_str(" current");
                 }
                 rsx! {
-                    div { key: "{i}", class: "{class}", style: "left: {pct}%",
-                        if detail {
-                            span { class: "flag", "{i + 2}" }
-                        }
-                    }
+                    div { key: "{i}", class: "{class}", style: "left: {pct}%" }
                 }
+            }
+        }
+    }
+}
+
+/// Each track's number and name where it starts (or at the left edge if it started earlier),
+/// coloured like its split: the titles typed in the list show up on the waveform.
+#[component]
+fn TrackLabels(total: u64, start: u64, end: u64) -> Element {
+    let app = use_context::<state::App>();
+    let cutlist = app.cutlist.read();
+    let _ = app.selected.read();
+    let Some(edit) = app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p))) else { return rsx! {} };
+    if end <= start {
+        return rsx! {};
+    }
+    let span = (end - start) as f64;
+    let names = edit.names(total);
+    let labels: Vec<(usize, &str, String, f64, f64)> = edit
+        .tracks(total)
+        .iter()
+        .filter(|t| t.end > start && t.start < end)
+        .map(|t| {
+            let class = match t.index.checked_sub(1).and_then(|i| edit.splits.get(i)).map(|s| s.state) {
+                None => "track-label start",
+                Some(SplitState::Confirmed) => "track-label confirmed",
+                Some(SplitState::Suggested) => "track-label suggested",
+            };
+            let text = match &names[t.index] {
+                Some(name) => format!("{} · {name}", t.index + 1),
+                None => format!("{}", t.index + 1),
+            };
+            let a = t.start.max(start) - start;
+            let b = t.end.min(end) - start;
+            (t.index, class, text, a as f64 / span * 100.0, (b - a) as f64 / span * 100.0)
+        })
+        .collect();
+    rsx! {
+        for (k, class, text, left, width) in labels {
+            div { key: "{k}", class: "track-label-slot", style: "left: {left}%; width: {width}%",
+                span { class: "{class}", title: "{text}", "{text}" }
             }
         }
     }
@@ -693,7 +959,7 @@ fn Overview(scan: ScanRef) -> Element {
         div { class: "overview",
             Wave { scan: scan.clone(), start: 0, end: total }
             Silences { total, start: 0, end: total }
-            Dropped { total, start: 0, end: total }
+            Parts { total, start: 0, end: total, labels: false }
             AbBand { start: 0, end: total }
             Markers { start: 0, end: total, detail: false }
             div { class: "window", style: "left: {left}%; width: {width}%" }
@@ -740,9 +1006,10 @@ fn Detail(scan: ScanRef) -> Element {
             div { class: "detail-wave",
                 Wave { scan: scan.clone(), start, end }
                 Silences { total: scan.0.info.total_samples, start, end }
-                Dropped { total: scan.0.info.total_samples, start, end }
+                Parts { total: scan.0.info.total_samples, start, end, labels: true }
                 AbBand { start, end }
                 Markers { start, end, detail: true }
+                TrackLabels { total: scan.0.info.total_samples, start, end }
                 Playhead { start, end }
                 Interact { start, end, center: false, edit_splits: true }
             }
@@ -757,6 +1024,7 @@ fn Transport(scan: ScanRef) -> Element {
     let total = scan.0.info.total_samples as f64 / rate;
     let pos = (app.pos)() as f64 / rate;
     let playing = (app.playing)();
+    let preview = (app.preview)();
     let span = (app.view)().span_secs;
     rsx! {
         div { class: "transport",
@@ -767,6 +1035,12 @@ fn Transport(scan: ScanRef) -> Element {
             }
             span { class: "time", "{fmt_precise(pos)}" }
             span { class: "time dim", "/ {fmt_precise(total)}" }
+            button {
+                class: if preview { "preview on" } else { "preview" },
+                title: "Play only what the export keeps: skip cut silence and left-out tracks (P)",
+                onclick: move |_| app.toggle_preview(),
+                if preview { "✂ Preview cuts: on" } else { "✂ Preview cuts" }
+            }
             AbStatus {}
             span { class: "spacer" }
             button { onclick: move |_| app.zoom(2.0), "−" }
@@ -869,30 +1143,58 @@ fn Silences(total: u64, start: u64, end: u64) -> Element {
     }
 }
 
-/// Hatched overlay over tracks that are left out of the export.
-#[component]
-fn Dropped(total: u64, start: u64, end: u64) -> Element {
+/// The track X and T act on (a memo, so playback only re-renders when it changes).
+fn use_focus_track() -> Memo<Option<usize>> {
     let app = use_context::<state::App>();
+    use_memo(move || {
+        let (pos, cur, closed) = ((app.pos)(), (app.cur_split)(), (app.closed_track)());
+        let _ = app.selected.read();
+        let cutlist = app.cutlist.read();
+        app.selected_path()
+            .and_then(|p| cutlist.recordings.get(&key_of(&p)).map(|e| review::track_in_focus(e, cur, closed, pos)))
+    })
+}
+
+/// Parts of the recording on the waveforms: left-out tracks in red ("✂ cut"), and the track
+/// X and T act on, highlighted so it's clear what X will cut.
+#[component]
+fn Parts(total: u64, start: u64, end: u64, labels: bool) -> Element {
+    let app = use_context::<state::App>();
+    let focus = use_focus_track();
     let cutlist = app.cutlist.read();
     let _ = app.selected.read();
     let Some(edit) = app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p))) else { return rsx! {} };
     if end <= start {
         return rsx! {};
     }
+    let focus = focus();
+    let names = edit.names(total);
     let span = (end - start) as f64;
-    let bands: Vec<(usize, f64, f64)> = edit
+    let bands: Vec<(usize, &str, String, f64, f64)> = edit
         .tracks(total)
         .iter()
-        .filter(|t| t.meta.drop && t.end > start && t.start < end)
+        .filter(|t| t.end > start && t.start < end && (t.meta.drop || focus == Some(t.index)))
         .map(|t| {
             let a = t.start.max(start) - start;
             let b = t.end.min(end) - start;
-            (t.index, a as f64 / span * 100.0, (b - a) as f64 / span * 100.0)
+            let (class, label) = match (t.meta.drop, focus == Some(t.index)) {
+                (true, true) => ("part cut focus", "✂ cut · X to keep".to_string()),
+                (true, false) => ("part cut", "✂ cut".to_string()),
+                _ => {
+                    let name = names[t.index].clone().unwrap_or_else(|| format!("Track {}", t.index + 1));
+                    ("part focus", format!("{name} · X to cut"))
+                }
+            };
+            (t.index, class, label, a as f64 / span * 100.0, (b - a) as f64 / span * 100.0)
         })
         .collect();
     rsx! {
-        for (k, left, width) in bands {
-            div { key: "{k}", class: "dropped", style: "left: {left}%; width: {width}%" }
+        for (k, class, label, left, width) in bands {
+            div { key: "{k}", class: "{class}", style: "left: {left}%; width: {width}%",
+                if labels {
+                    span { class: "part-label", "{label}" }
+                }
+            }
         }
     }
 }
@@ -918,9 +1220,11 @@ fn ExportBar(scan: ScanRef) -> Element {
     let map = app.loudness.read().get(&path).cloned();
     let set: Option<Loudness> = map.map(|m| m.ranges(&planned.iter().map(|t| (t.start, t.end)).collect::<Vec<_>>()));
     let info = &scan.0.info;
-    let facts = source_facts(info, scan.0.mp3.is_some());
+    let facts = source_facts(&path, &scan.0);
+    // What Original really writes for this file (FLAC for the audio of a video).
+    let effective = profile.effective(&facts);
     let secs: f64 = planned.iter().map(|t| (t.end - t.start) as f64).sum::<f64>() / info.sample_rate as f64;
-    let bytes = if profile == Profile::Original {
+    let bytes = if effective == Profile::Original {
         // Exact for the source's own format: its share of the file.
         (info.file_size as f64 * secs / info.duration_secs().max(1e-9)) as u64
     } else {
@@ -928,7 +1232,7 @@ fn ExportBar(scan: ScanRef) -> Element {
     };
     let size = fmt_bytes(bytes);
     let warnings = profile.warnings(&facts);
-    let ext = profile.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
+    let ext = effective.extension(path.extension().and_then(|e| e.to_str()).unwrap_or("mp3")).to_string();
     let selected_idx = Profile::CHOICES.iter().position(|p| *p == profile).unwrap_or(0);
 
     rsx! {
@@ -963,12 +1267,12 @@ fn ExportBar(scan: ScanRef) -> Element {
             }
             select {
                 class: "profile",
-                title: if profile == Profile::Original {
+                title: if effective == Profile::Original {
                     "A byte copy can't change level; tracks get ReplayGain tags instead"
                 } else {
                     "Loudness adjustment (never pushes true peak above -1 dBTP)"
                 },
-                disabled: profile == Profile::Original,
+                disabled: effective == Profile::Original,
                 value: "{norm_idx}",
                 onchange: move |e| {
                     if let Some(n) = e.value().parse::<usize>().ok().and_then(|i| Normalize::CHOICES.get(i)) {
@@ -1080,13 +1384,7 @@ fn AbStatus() -> Element {
 #[component]
 fn TrackList(scan: ScanRef) -> Element {
     let app = use_context::<state::App>();
-    // The track T and X act on. A memo, so playback only re-renders the list when it changes.
-    let current = use_memo(move || {
-        let (pos, cur) = ((app.pos)(), (app.cur_split)());
-        let _ = app.selected.read();
-        let cutlist = app.cutlist.read();
-        app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p)).map(|e| e.current_track(cur, pos)))
-    });
+    let current = use_focus_track();
     // Keep the current row visible.
     use_effect(move || {
         let _ = current();
@@ -1103,15 +1401,19 @@ fn TrackList(scan: ScanRef) -> Element {
     let Some(edit) = app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p)).cloned()) else {
         return rsx! {};
     };
-    let tracks: Vec<_> =
-        edit.tracks(total).into_iter().map(|t| (t.index, t.audio_start, t.audio_end, t.meta.clone())).collect();
+    let names = edit.names(total);
+    let tracks: Vec<_> = edit
+        .tracks(total)
+        .into_iter()
+        .map(|t| (t.index, t.audio_start, t.audio_end, t.meta.clone(), names[t.index].clone().unwrap_or_default()))
+        .collect();
     let count = tracks.len();
     let current = current();
     let map = app.selected_path().and_then(|p| app.loudness.read().get(&p).cloned());
 
     rsx! {
         div { class: "tracks",
-            for (k, a, b, meta) in tracks {
+            for (k, a, b, meta, name) in tracks {
                 {
                     // Track k starts at split k-1.
                     let state = k.checked_sub(1).and_then(|i| edit.splits.get(i)).map(|s| s.state);
@@ -1131,26 +1433,41 @@ fn TrackList(scan: ScanRef) -> Element {
                         div {
                             key: "{k}",
                             class: "{class}",
-                            onclick: move |_| match k.checked_sub(1) {
-                                Some(i) => app.select_split(i, true),
-                                None => app.seek(0, true),
-                            },
+                            onclick: move |_| app.play_track(k),
                             span { class: "num", "{k + 1}" }
-                            if editing == Some(k) {
-                                TitleEditor { key: "{k}", track: k, count, initial: meta.title.clone() }
-                            } else {
-                                span {
-                                    class: if meta.title.is_empty() { "title empty" } else { "title" },
-                                    title: "Click or press T to name this track",
-                                    onclick: move |e| {
-                                        e.stop_propagation();
-                                        app.edit_title(Some(k));
-                                    },
-                                    if meta.title.is_empty() { "untitled" } else { "{meta.title}" }
-                                }
-                            }
                             span { class: "t", "{fmt_precise(a as f64 / rate)}" }
                             span { class: "len", "{fmt_short((b - a) as f64 / rate)}" }
+                            if editing == Some(k) {
+                                TitleEditor {
+                                    key: "{k}",
+                                    track: k,
+                                    count,
+                                    initial: meta.title.clone(),
+                                    suggested: name.clone(),
+                                }
+                            } else {
+                                div { class: "title-cell",
+                                    span {
+                                        class: if meta.title.is_empty() { "title empty" } else { "title" },
+                                        if !meta.title.is_empty() {
+                                            "{meta.title}"
+                                        } else if !name.is_empty() {
+                                            "{name}"
+                                        } else {
+                                            "untitled"
+                                        }
+                                    }
+                                    button {
+                                        class: "rename",
+                                        title: "Rename (T)",
+                                        onclick: move |e| {
+                                            e.stop_propagation();
+                                            app.edit_title(Some(k));
+                                        },
+                                        "✎"
+                                    }
+                                }
+                            }
                             {
                                 match map.as_ref().map(|m| m.range(a, b)) {
                                     Some(Loudness { lufs: Some(l), peak_db }) => rsx! {
@@ -1185,17 +1502,21 @@ fn TrackList(scan: ScanRef) -> Element {
 
 /// Inline title field. Enter saves and moves on to the next track, Esc cancels.
 #[component]
-fn TitleEditor(track: usize, count: usize, initial: String) -> Element {
+fn TitleEditor(track: usize, count: usize, initial: String, suggested: String) -> Element {
     let app = use_context::<state::App>();
     let mut draft = use_signal(|| initial.clone());
     let mut closed = use_signal(|| false);
-    let mut close = move |save: bool, next: Option<usize>| {
+    let suggestion = use_signal(|| suggested.clone());
+    // `accept`: an empty field takes the suggested name (Tab), instead of staying untitled.
+    let mut close = move |save: bool, accept: bool, next: Option<usize>| {
         if closed() {
             return;
         }
         closed.set(true);
         if save {
-            app.set_title(track, draft());
+            let typed = draft();
+            let title = if accept && typed.trim().is_empty() { suggestion() } else { typed };
+            app.set_title(track, title);
         }
         let mut editing = app.editing_title;
         editing.set(next);
@@ -1207,7 +1528,7 @@ fn TitleEditor(track: usize, count: usize, initial: String) -> Element {
         input {
             class: "title-input",
             value: "{draft}",
-            placeholder: "Track {track + 1} title",
+            placeholder: if suggested.is_empty() { "Title".to_string() } else { format!("{suggested} (Tab to accept)") },
             onmounted: move |e| async move {
                 let _ = e.set_focus(true).await;
             },
@@ -1215,13 +1536,19 @@ fn TitleEditor(track: usize, count: usize, initial: String) -> Element {
             onclick: move |e| e.stop_propagation(),
             onkeydown: move |e| {
                 e.stop_propagation();
+                let next = (track + 1 < count).then_some(track + 1);
                 match e.key() {
-                    Key::Enter => close(true, (track + 1 < count).then_some(track + 1)),
-                    Key::Escape => close(false, None),
+                    Key::Enter => close(true, false, next),
+                    // Tab: keep what's typed, or take the suggested name; then the next (⇧ previous) track.
+                    Key::Tab => {
+                        e.prevent_default();
+                        close(true, true, if e.modifiers().shift() { track.checked_sub(1) } else { next });
+                    }
+                    Key::Escape => close(false, false, None),
                     _ => {}
                 }
             },
-            onblur: move |_| close(true, None),
+            onblur: move |_| close(true, false, None),
         }
     }
 }
@@ -1316,7 +1643,9 @@ fn Keys() -> Element {
     ];
     let tracks = [
         ("T", "title"),
-        ("X", "leave out / keep"),
+        ("R", "rename file"),
+        ("P", "preview cuts"),
+        ("X", "cut / keep this part"),
         ("G", "cut / keep silence"),
         ("A", "A/B compare"),
         ("F", "flag file"),

@@ -74,6 +74,12 @@ pub struct ExportJob {
     pub gain_db: f64,
 }
 
+/// Whether `Profile::Original` can copy this source's audio as is: MP3 frames or WAV bytes.
+/// Audio inside a video file can't be copied out without a muxer, so it has to be re-encoded.
+pub fn can_copy(source: &Path, scan: &Scan) -> bool {
+    scan.mp3.is_some() || source.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+}
+
 /// Write every job with `profile`. `progress` is called with the number of files finished.
 pub fn export(
     source: &Path,
@@ -82,6 +88,9 @@ pub fn export(
     profile: Profile,
     progress: &mut dyn FnMut(usize),
 ) -> Result<()> {
+    if profile == Profile::Original && !can_copy(source, scan) {
+        bail!("the audio of this file can't be copied as is; pick another format");
+    }
     let mut src = File::open(source).with_context(|| format!("opening {}", source.display()))?;
     let wav = match (&scan.mp3, profile) {
         (None, Profile::Original) => Some(WavLayout::read(&mut src).context("reading the WAV structure")?),
@@ -329,15 +338,15 @@ pub(crate) fn id3v2(tags: &Tags) -> Vec<u8> {
 // WAV
 
 #[derive(Debug)]
-struct WavLayout {
-    fmt: Vec<u8>,
-    data_offset: u64,
-    data_len: u64,
-    block_align: u64,
+pub(crate) struct WavLayout {
+    pub(crate) fmt: Vec<u8>,
+    pub(crate) data_offset: u64,
+    pub(crate) data_len: u64,
+    pub(crate) block_align: u64,
 }
 
 impl WavLayout {
-    fn read(f: &mut File) -> Result<Self> {
+    pub(crate) fn read(f: &mut File) -> Result<Self> {
         let mut head = [0u8; 12];
         f.seek(SeekFrom::Start(0))?;
         f.read_exact(&mut head)?;

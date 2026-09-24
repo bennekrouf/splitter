@@ -12,7 +12,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
@@ -43,6 +43,8 @@ pub(crate) struct Decoding {
     track_id: u32,
     buf: Option<SampleBuffer<f32>>,
     discard: u64,
+    /// Compressed bytes of this track read so far (other tracks, e.g. video, not counted).
+    pub(crate) packet_bytes: u64,
 }
 
 impl Decoding {
@@ -60,19 +62,34 @@ impl Decoding {
     }
 
     fn from_format(format: Box<dyn FormatReader>) -> Result<Self> {
+        // A video file's video (and subtitle) tracks have no codec symphonia knows, and no
+        // sample rate; the first track with both is the audio.
         let track = format
             .tracks()
             .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some())
             .ok_or_else(|| anyhow!("no audio track"))?;
         let decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
             .context("unsupported codec")?;
-        Ok(Self { track_id: track.id, format, decoder, buf: None, discard: 0 })
+        Ok(Self { track_id: track.id, format, decoder, buf: None, discard: 0, packet_bytes: 0 })
     }
 
-    pub(crate) fn format(&self) -> &dyn FormatReader {
-        self.format.as_ref()
+    /// Codec parameters of the track being decoded.
+    pub(crate) fn params(&self) -> &CodecParameters {
+        &self.format.tracks().iter().find(|t| t.id == self.track_id).unwrap().codec_params
+    }
+
+    /// Channel count. MP4 leaves it to the AAC config, which only the decoder reads: its
+    /// output buffer already has the right layout before the first packet.
+    pub(crate) fn channels(&self) -> usize {
+        let params = self.params();
+        params
+            .channels
+            .or_else(|| params.channel_layout.map(|l| l.into_channels()))
+            .map(|c| c.count())
+            .unwrap_or_else(|| self.decoder.last_decoded().spec().channels.count())
+            .max(1)
     }
 
     pub(crate) fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
@@ -85,6 +102,7 @@ impl Decoding {
             if packet.track_id() != self.track_id {
                 continue;
             }
+            self.packet_bytes += packet.buf().len() as u64;
             let decoded = match self.decoder.decode(&packet) {
                 Ok(d) => d,
                 Err(SymError::DecodeError(_)) => continue, // corrupt frame: skip it
@@ -163,20 +181,38 @@ pub struct GenericSource {
     dec: Decoding,
     channels: usize,
     rate: u32,
+    /// The track's timestamp unit as `(numer, denom)` seconds. An MP4 track's timescale isn't
+    /// always its sample rate; WAV and MP3 count in sample frames.
+    time_base: Option<(u32, u32)>,
 }
 
 impl GenericSource {
     pub fn open(path: &Path) -> Result<Self> {
         let dec = Decoding::probe(path)?;
-        let params = &dec.format().tracks().iter().find(|t| t.id == dec.track_id).unwrap().codec_params;
-        let channels = params.channels.map(|c| c.count()).unwrap_or(2);
+        let channels = dec.channels();
+        let params = dec.params();
         let rate = params.sample_rate.ok_or_else(|| anyhow!("unknown sample rate"))?;
-        Ok(Self { dec, channels, rate })
+        let time_base = params.time_base.map(|tb| (tb.numer, tb.denom));
+        Ok(Self { dec, channels, rate, time_base })
+    }
+
+    fn to_ts(&self, frame: u64) -> u64 {
+        match self.time_base {
+            Some((n, d)) => (frame as u128 * d as u128 / (n as u128 * self.rate as u128)) as u64,
+            None => frame,
+        }
+    }
+
+    fn to_frame(&self, ts: u64) -> u64 {
+        match self.time_base {
+            Some((n, d)) => (ts as u128 * n as u128 * self.rate as u128 / d as u128) as u64,
+            None => ts,
+        }
     }
 
     /// Length in sample frames, when the container says.
     pub fn total_frames(&self) -> Option<u64> {
-        self.dec.format().tracks().iter().find(|t| t.id == self.dec.track_id)?.codec_params.n_frames
+        self.dec.params().n_frames
     }
 }
 
@@ -190,11 +226,27 @@ impl PcmSource for GenericSource {
     }
 
     fn seek(&mut self, frame: u64) -> Result<()> {
-        let seeked =
-            self.dec.format.seek(SeekMode::Accurate, SeekTo::TimeStamp { ts: frame, track_id: self.dec.track_id })?;
-        self.dec.decoder.reset();
-        self.dec.discard = seeked.required_ts.saturating_sub(seeked.actual_ts);
-        Ok(())
+        // Start 2048 frames early: AAC (like MP3) needs the packet before the target to rebuild
+        // its overlap, and symphonia's seek only lands on a packet boundary. Symphonia's MP4
+        // reader also can't seek into the last packets ("end of stream"): start further back
+        // then. Whatever comes before the target is discarded.
+        let mut err = None;
+        for back in [2048, 16384, 131072] {
+            let from = frame.saturating_sub(back);
+            let to = SeekTo::TimeStamp { ts: self.to_ts(from), track_id: self.dec.track_id };
+            match self.dec.format.seek(SeekMode::Accurate, to) {
+                Ok(seeked) => {
+                    self.dec.decoder.reset();
+                    self.dec.discard = frame.saturating_sub(self.to_frame(seeked.actual_ts));
+                    return Ok(());
+                }
+                Err(e) => err = Some(e),
+            }
+            if from == 0 {
+                break;
+            }
+        }
+        Err(err.unwrap().into())
     }
 
     fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {

@@ -27,6 +27,7 @@ enum Cmd {
     SetAlt(Option<AltPcm>),
     UseAlt(bool),
     Loop(Option<(u64, u64)>),
+    Skip(Vec<(u64, u64)>),
 }
 
 /// Alternative audio for part of the recording (an encoded preview), aligned to source frames.
@@ -110,6 +111,11 @@ impl Player {
     pub fn set_loop(&self, range: Option<(u64, u64)>) {
         let _ = self.tx.send(Cmd::Loop(range));
     }
+    /// Jump over these source ranges while playing (sorted, non-overlapping; empty = play
+    /// everything). Nothing inside them is played, not even the few ms before a jump.
+    pub fn set_skips(&self, ranges: Vec<(u64, u64)>) {
+        let _ = self.tx.send(Cmd::Skip(ranges));
+    }
 
     pub fn is_using_alt(&self) -> bool {
         self.shared.using_alt.load(Relaxed)
@@ -150,16 +156,21 @@ struct Loaded {
     pending: Vec<f32>,
     pending_at: usize,
     eos: bool,
+    /// Source frame of the next `source.read`.
+    read_pos: u64,
+    /// Decoding stopped at the start of a skipped range; resumes after the jump.
+    held: bool,
 }
 
 struct Engine {
     shared: Arc<Shared>,
     cur: Option<Loaded>,
+    skips: Vec<(u64, u64)>,
 }
 
 impl Engine {
     fn new(shared: Arc<Shared>) -> Self {
-        Self { shared, cur: None }
+        Self { shared, cur: None, skips: Vec::new() }
     }
 
     fn run(mut self, rx: Receiver<Cmd>) {
@@ -175,6 +186,7 @@ impl Engine {
             }
             self.fill();
             self.check_loop();
+            self.check_skip();
         }
     }
 
@@ -196,6 +208,22 @@ impl Engine {
             self.shared.playing.store(true, Relaxed);
         } else if self.shared.playing.load(Relaxed) && self.position() >= b {
             self.seek(a);
+        }
+    }
+
+    /// Playing into a skipped range (the ring has drained up to its start): jump past it.
+    fn check_skip(&mut self) {
+        if self.cur.is_none() || !self.shared.playing.load(Relaxed) {
+            return;
+        }
+        let pos = self.position();
+        if let Some(&(_, end)) = self.skips.iter().find(|&&(a, b)| a <= pos && pos < b) {
+            let stop = self.shared.stop_at.load(Relaxed);
+            self.seek(end);
+            self.shared.stop_at.store(stop, Relaxed);
+            if end >= self.shared.total.load(Relaxed) {
+                self.shared.playing.store(false, Relaxed);
+            }
         }
     }
 
@@ -274,6 +302,17 @@ impl Engine {
                     cur.loop_range = range;
                 }
             }
+            Cmd::Skip(ranges) => {
+                self.skips = ranges;
+                // Re-buffer from the playhead, so audio already decoded past a new boundary
+                // (or held at a removed one) follows the new ranges.
+                if self.cur.is_some() {
+                    let (playing, stop) = (s.playing.load(Relaxed), s.stop_at.load(Relaxed));
+                    self.seek(self.position());
+                    s.playing.store(playing, Relaxed);
+                    s.stop_at.store(stop, Relaxed);
+                }
+            }
         }
     }
 
@@ -319,6 +358,8 @@ impl Engine {
         cur.pending.clear();
         cur.pending_at = 0;
         cur.resampler.reset();
+        cur.read_pos = frame;
+        cur.held = false;
         cur.eos = false;
         s.eos.store(false, Relaxed);
         if let Err(e) = cur.source.seek(frame) {
@@ -329,7 +370,7 @@ impl Engine {
     }
 
     fn wants_data(&self) -> bool {
-        self.cur.as_ref().is_some_and(|c| !c.eos && c.ring.free() >= c.ring_chunk())
+        self.cur.as_ref().is_some_and(|c| !c.eos && !c.held && c.ring.free() >= c.ring_chunk())
     }
 
     fn fill(&mut self) {
@@ -344,7 +385,13 @@ impl Engine {
                 }
                 continue;
             }
-            if cur.eos || cur.ring.free() < cur.ring_chunk() {
+            if cur.eos || cur.held || cur.ring.free() < cur.ring_chunk() {
+                return;
+            }
+            // Don't decode into the next skipped range: stop at its start and wait for the jump.
+            let next_skip = self.skips.iter().find(|&&(_, b)| b > cur.read_pos).map(|&(a, _)| a);
+            if next_skip.is_some_and(|a| a <= cur.read_pos) {
+                cur.held = true;
                 return;
             }
             cur.src_buf.clear();
@@ -353,6 +400,12 @@ impl Engine {
                     cur.pending.clear();
                     cur.pending_at = 0;
                     let src_ch = cur.source.channels();
+                    let frames = (cur.src_buf.len() / src_ch) as u64;
+                    if let Some(a) = next_skip.filter(|&a| a < cur.read_pos + frames) {
+                        cur.src_buf.truncate((a - cur.read_pos) as usize * src_ch);
+                        cur.held = true;
+                    }
+                    cur.read_pos += frames;
                     cur.resampler.process(&cur.src_buf, src_ch, cur.dev_channels, &mut cur.pending);
                 }
                 Ok(false) => {
@@ -439,6 +492,8 @@ impl Engine {
             pending: Vec::with_capacity(8192),
             pending_at: 0,
             eos: false,
+            read_pos: 0,
+            held: false,
         })
     }
 }

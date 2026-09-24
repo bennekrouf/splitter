@@ -126,3 +126,51 @@ fn previews_line_up_with_the_source() {
         assert!(snr > floor, "{}: SNR {snr:.1} dB", profile.short());
     }
 }
+
+/// Apply cuts: the kept ranges come out back to back, sample for sample, from WAV and MP3.
+#[test]
+fn kept_ranges_are_written_back_to_back() {
+    use splitter_audio::transcode::write_ranges_to_wav;
+    let wav = tmp("cleaned-src.wav");
+    write_wav(&wav);
+    let mp3 = tmp("cleaned-src.mp3");
+    encode_mp3(&mp3, Mp3Mode::Cbr(Bitrate::Kbps128));
+    let ranges = [(1_000, 30_000), (40_000, 41_000), (70_000, 100_000)];
+    for (src, name) in [(&wav, "cleaned-wav.wav"), (&mp3, "cleaned-mp3.wav")] {
+        let (pcm, ch) = source_pcm(src);
+        let s = scan(src, &mut |_| {}).unwrap();
+        let out = tmp(name);
+        write_ranges_to_wav(src, &s, &ranges, &out, &mut |_| {}).unwrap();
+        let want: Vec<f32> = ranges.iter().flat_map(|&(a, b)| pcm[a as usize * ch..b as usize * ch].to_vec()).collect();
+        let (got, got_ch) = source_pcm(&out);
+        assert_eq!(got_ch, ch);
+        assert_eq!(got.len(), want.len(), "{name}: length");
+        // 16-bit output: within one quantization step of the source.
+        assert!(max_diff(&got, &want) <= 1.0 / 32768.0 + 1e-6, "{name}: {}", max_diff(&got, &want));
+    }
+}
+
+/// Audio inside a video can't be copied as is; re-encoding it cuts exactly `[A, B)`.
+#[test]
+fn video_audio_exports_by_reencoding() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video.mp4");
+    let s = scan(&src, &mut |_| {}).unwrap();
+    assert!(!splitter_audio::export::can_copy(&src, &s));
+    let job = |path: PathBuf| ExportJob {
+        start: A,
+        end: B,
+        path,
+        gain_db: 0.0,
+        tags: Tags { replaygain: None, title: "Clip".into(), album: "Video".into(), track: 1, total: 1 },
+    };
+    let original = tmp("transcode").join("video-original.mp4");
+    assert!(export(&src, &s, &[job(original.clone())], Profile::Original, &mut |_| {}).is_err());
+    assert!(!original.exists());
+
+    let (pcm, ch) = source_pcm(&src);
+    let out = export_one(&src, Profile::Flac, "video-flac");
+    let got = decode_gapless(&out);
+    let want = &pcm[A as usize * ch..B as usize * ch];
+    assert_eq!(got.len(), want.len());
+    assert!(max_diff(&got, want) < 1.0 / 32768.0 * 1.5, "FLAC of the decoded AAC must match it");
+}
