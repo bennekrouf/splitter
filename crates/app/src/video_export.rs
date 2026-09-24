@@ -266,7 +266,7 @@ mod tests {
             .args(["-vn", "-ac", "1", "-f", "f32le", "-"])
             .output()
             .unwrap();
-        out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+        out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
     }
 
     /// The shift of `got` against `want` (within ±`max`) with the best match.
