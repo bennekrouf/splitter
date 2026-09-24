@@ -1,15 +1,18 @@
 //! Split suggestions from the loudness track (RMS dBFS per fixed window).
 
-use crate::edit::{DetectParams, Split};
+use crate::edit::{DetectParams, Silence, Split};
+
+/// Silence kept at each edge of a cut, so quiet attacks and decays aren't clipped.
+pub const CUT_MARGIN_SECS: f64 = 0.25;
 
 /// A run of quiet windows, as window indices `[start, end)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Silence {
+pub struct Run {
     pub start: usize,
     pub end: usize,
 }
 
-pub fn silences(db: &[f32], window: u64, rate: u32, p: &DetectParams) -> Vec<Silence> {
+pub fn silences(db: &[f32], window: u64, rate: u32, p: &DetectParams) -> Vec<Run> {
     let min_windows = ((p.min_silence_secs as f64 * rate as f64) / window as f64).ceil().max(1.0) as usize;
     let mut out = Vec::new();
     let mut run_start = None;
@@ -18,7 +21,7 @@ pub fn silences(db: &[f32], window: u64, rate: u32, p: &DetectParams) -> Vec<Sil
             (true, None) => run_start = Some(i),
             (false, Some(s)) => {
                 if i - s >= min_windows {
-                    out.push(Silence { start: s, end: i });
+                    out.push(Run { start: s, end: i });
                 }
                 run_start = None;
             }
@@ -26,6 +29,21 @@ pub fn silences(db: &[f32], window: u64, rate: u32, p: &DetectParams) -> Vec<Sil
         }
     }
     out
+}
+
+/// Every silence as sample frames, less `CUT_MARGIN_SECS` on each side that borders sound.
+/// Lead-in and tail silence reach the recording's start and end (the tail's end may lie past the
+/// last sample, since the last window can be partial).
+pub fn tag(db: &[f32], window: u64, rate: u32, p: &DetectParams) -> Vec<Silence> {
+    let margin = (CUT_MARGIN_SECS * rate as f64) as u64;
+    silences(db, window, rate, p)
+        .into_iter()
+        .filter_map(|r| {
+            let start = if r.start == 0 { 0 } else { r.start as u64 * window + margin };
+            let end = if r.end >= db.len() { u64::MAX } else { (r.end as u64 * window).saturating_sub(margin) };
+            (start < end).then_some(Silence { start, end, keep: false })
+        })
+        .collect()
 }
 
 /// One suggested split in the middle of each silence, skipping lead-in and tail silence, and
@@ -112,6 +130,17 @@ mod tests {
         let s = suggest(&d, WIN, RATE, &params());
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].silence_secs, Some(4.0));
+    }
+
+    #[test]
+    fn tags_silence_with_margins() {
+        let d = db(&[(3.0, -80.0), (60.0, -20.0), (2.0, -70.0), (60.0, -20.0), (3.0, -80.0)]);
+        let t = tag(&d, WIN, RATE, &params());
+        let bounds: Vec<(u64, u64)> = t.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(bounds, [(0, 2_750), (63_250, 64_750), (125_250, u64::MAX)]);
+        // The suggested split sits inside the tagged gap.
+        let at = suggest(&d, WIN, RATE, &params())[0].at;
+        assert!(t[1].start < at && at < t[1].end);
     }
 
     #[test]

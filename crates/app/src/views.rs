@@ -157,6 +157,10 @@ pub fn App() -> Element {
                 app.toggle_drop(None);
                 true
             }
+            Code::KeyG if !cmd => {
+                app.toggle_silence();
+                true
+            }
             Code::KeyE if cmd && m.shift() => {
                 app.export_done();
                 true
@@ -688,6 +692,7 @@ fn Overview(scan: ScanRef) -> Element {
     rsx! {
         div { class: "overview",
             Wave { scan: scan.clone(), start: 0, end: total }
+            Silences { total, start: 0, end: total }
             Dropped { total, start: 0, end: total }
             AbBand { start: 0, end: total }
             Markers { start: 0, end: total, detail: false }
@@ -734,6 +739,7 @@ fn Detail(scan: ScanRef) -> Element {
             }
             div { class: "detail-wave",
                 Wave { scan: scan.clone(), start, end }
+                Silences { total: scan.0.info.total_samples, start, end }
                 Dropped { total: scan.0.info.total_samples, start, end }
                 AbBand { start, end }
                 Markers { start, end, detail: true }
@@ -799,6 +805,11 @@ fn ReviewBar(scan: ScanRef) -> Element {
                             if let Some(sil) = s.silence_secs {
                                 " · {sil:.1} s silence"
                             }
+                            match edit.silence_at(s.at).map(|j| edit.silences[j].keep) {
+                                Some(false) => rsx! { " · silence cut (G keeps it)" },
+                                Some(true) => rsx! { " · silence kept (G cuts it)" },
+                                None => rsx! {},
+                            }
                             if s.state == SplitState::Suggested { " · suggested" } else { " · confirmed" }
                         }
                     },
@@ -818,6 +829,42 @@ fn ReviewBar(scan: ScanRef) -> Element {
                 button { onclick: move |_| app.set_detect_params(|p| p.min_silence_secs += 0.25), "+" }
                 button { class: "primary", onclick: move |_| app.redetect(), title: "Replace unreviewed suggestions; confirmed splits are kept", "Re-detect" }
             }
+        }
+    }
+}
+
+/// Tagged silence: cut from the export where it borders a track, kept (G), or inside a track.
+#[component]
+fn Silences(total: u64, start: u64, end: u64) -> Element {
+    let app = use_context::<state::App>();
+    let cutlist = app.cutlist.read();
+    let _ = app.selected.read();
+    let Some(edit) = app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p))) else { return rsx! {} };
+    if end <= start {
+        return rsx! {};
+    }
+    let span = (end - start) as f64;
+    let bands: Vec<(usize, &str, f64, f64)> = edit
+        .silences
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, s, s.end.min(total)))
+        .filter(|&(_, s, e)| e > start && s.start < end)
+        .map(|(i, s, e)| {
+            let edge = s.start == 0 || e >= total || edit.splits.iter().any(|p| s.start < p.at && p.at < e);
+            let class = match (edge, s.keep) {
+                (true, false) => "silence cut",
+                (true, true) => "silence kept",
+                (false, _) => "silence", // inside a track: never cut
+            };
+            let a = s.start.max(start) - start;
+            let b = e.min(end) - start;
+            (i, class, a as f64 / span * 100.0, (b - a) as f64 / span * 100.0)
+        })
+        .collect();
+    rsx! {
+        for (i, class, left, width) in bands {
+            div { key: "{i}", class: "{class}", style: "left: {left}%; width: {width}%" }
         }
     }
 }
@@ -1056,7 +1103,8 @@ fn TrackList(scan: ScanRef) -> Element {
     let Some(edit) = app.selected_path().and_then(|p| cutlist.recordings.get(&key_of(&p)).cloned()) else {
         return rsx! {};
     };
-    let tracks: Vec<_> = edit.tracks(total).into_iter().map(|t| (t.index, t.start, t.end, t.meta.clone())).collect();
+    let tracks: Vec<_> =
+        edit.tracks(total).into_iter().map(|t| (t.index, t.audio_start, t.audio_end, t.meta.clone())).collect();
     let count = tracks.len();
     let current = current();
     let map = app.selected_path().and_then(|p| app.loudness.read().get(&p).cloned());
@@ -1076,7 +1124,7 @@ fn TrackList(scan: ScanRef) -> Element {
                     if current == Some(k) {
                         class.push_str(" current");
                     }
-                    if meta.drop {
+                    if meta.drop || b <= a {
                         class.push_str(" dropped-row");
                     }
                     rsx! {
@@ -1188,7 +1236,7 @@ fn PasteDialog() -> Element {
     let kept = app
         .selected_path()
         .and_then(|p| cutlist.recordings.get(&key_of(&p)))
-        .map(|e| e.tracks(u64::MAX).iter().filter(|t| !t.meta.drop).count())
+        .map(|e| e.tracks(u64::MAX).iter().filter(|t| t.exported()).count())
         .unwrap_or(0);
     let mut paste = app.paste;
     let close = move || {
@@ -1269,6 +1317,7 @@ fn Keys() -> Element {
     let tracks = [
         ("T", "title"),
         ("X", "leave out / keep"),
+        ("G", "cut / keep silence"),
         ("A", "A/B compare"),
         ("F", "flag file"),
         ("⌘E", "export"),

@@ -282,6 +282,23 @@ kbd {
   background: repeating-linear-gradient(135deg, rgba(24, 24, 27, 0.72) 0 6px, rgba(24, 24, 27, 0.45) 6px 12px);
 }
 
+/* Tagged silence on the waveforms: cut (default), kept, or inside a track */
+.silence {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: rgba(242, 194, 91, 0.06);
+  border-left: 1px dashed rgba(242, 194, 91, 0.25);
+  border-right: 1px dashed rgba(242, 194, 91, 0.25);
+}
+.silence.cut {
+  background: repeating-linear-gradient(45deg, rgba(242, 139, 130, 0.22) 0 4px, rgba(242, 139, 130, 0.08) 4px 8px);
+  border-color: rgba(242, 139, 130, 0.6);
+  border-style: solid;
+}
+.silence.kept { background: rgba(111, 208, 140, 0.12); border-color: rgba(111, 208, 140, 0.5); }
+
 /* Export bar */
 .export-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .export-bar .ok, .ok { color: var(--ok); }

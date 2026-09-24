@@ -73,10 +73,10 @@ fn is_time(s: &str) -> bool {
         && parts.iter().all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// Give the kept (non-dropped) tracks the pasted titles, in order. Returns how many were set.
+/// Give the exported tracks (not left out, not all silence) the pasted titles, in order.
+/// Returns how many were set.
 pub fn apply(edit: &mut RecordingEdit, titles: &[String]) -> usize {
-    let kept: Vec<usize> =
-        (0..=edit.splits.len()).filter(|&k| edit.track_meta_mut(k).is_some_and(|m| !m.drop)).collect();
+    let kept: Vec<usize> = edit.tracks(u64::MAX).iter().filter(|t| t.exported()).map(|t| t.index).collect();
     let mut n = 0;
     for (k, title) in kept.into_iter().zip(titles) {
         if let Some(m) = edit.track_meta_mut(k) {

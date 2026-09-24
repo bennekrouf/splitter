@@ -4,7 +4,7 @@ use crate::state::{key_of, App};
 use dioxus::prelude::*;
 use splitter_audio::Scan;
 use splitter_core::detect;
-use splitter_core::edit::{DetectParams, RecordingEdit, Split};
+use splitter_core::edit::{DetectParams, RecordingEdit, Silence, Split};
 use splitter_core::tracklist;
 use splitter_core::Status;
 use std::path::Path;
@@ -67,17 +67,21 @@ impl App {
     }
 
     /// Run silence detection once per recording, when its scan first becomes available.
+    /// Recordings detected before silence tagging existed only get their silences tagged.
     pub fn ensure_detected(self, path: &Path, scan: &Scan) {
         let key = key_of(path);
         let mut cutlist = self.cutlist;
         {
             let mut cl = cutlist.write();
             let edit = cl.recordings.entry(key).or_default();
-            if edit.detected {
+            if edit.detected && edit.silences_detected {
                 return;
             }
-            let suggestions = suggest(scan, &edit.detect);
-            edit.apply_detection(suggestions, (KEEP_CLEAR_SECS * scan.info.sample_rate as f64) as u64);
+            if !edit.detected {
+                let suggestions = suggest(scan, &edit.detect);
+                edit.apply_detection(suggestions, (KEEP_CLEAR_SECS * scan.info.sample_rate as f64) as u64);
+            }
+            edit.set_silences(tag(scan, &edit.detect));
         }
         self.mark_dirty();
         self.save_now();
@@ -95,6 +99,7 @@ impl App {
         self.change(|e| {
             let suggestions = suggest(&scan, &e.detect);
             e.apply_detection(suggestions, gap);
+            e.set_silences(tag(&scan, &e.detect));
         });
         self.cur_split.set(None);
     }
@@ -296,6 +301,17 @@ impl App {
         });
     }
 
+    /// G: cut the silence at the selected split (or under the playhead) from the export, or keep it.
+    pub fn toggle_silence(self) {
+        let pos = *self.pos.peek();
+        let at = (*self.cur_split.peek()).and_then(|i| self.peek_edit(|e| e.splits.get(i).map(|s| s.at)).flatten());
+        self.change(|e| {
+            if let Some(i) = e.silence_at(at.unwrap_or(pos)) {
+                e.silences[i].keep = !e.silences[i].keep;
+            }
+        });
+    }
+
     /// T: type the current track's title.
     pub fn edit_title(mut self, track: Option<usize>) {
         if let Some(k) = track.or_else(|| self.current_track()) {
@@ -308,6 +324,11 @@ impl App {
         let titles = tracklist::parse(text);
         self.change(|e| tracklist::apply(e, &titles)).unwrap_or(0)
     }
+}
+
+fn tag(scan: &Scan, params: &DetectParams) -> Vec<Silence> {
+    let l = &scan.loudness;
+    detect::tag(&l.db, l.window, scan.info.sample_rate, params)
 }
 
 fn suggest(scan: &Scan, params: &DetectParams) -> Vec<Split> {

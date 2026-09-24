@@ -58,6 +58,7 @@ cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min
 | ⌫ | delete the split, go to the next one still to review |
 | , / . | nudge the split 10 ms (⇧ 100 ms) |
 | S | snap the split to the quietest point within ±0.5 s |
+| G | keep the silence at the split (or under the playhead) in the export, or cut it again |
 | M | add a split at the playhead |
 | C | listen across the split again |
 | drag a marker | move a split |
@@ -99,6 +100,15 @@ When a file is first analysed, silence detection suggests a split in the middle 
 stretch (below −45 dB for at least 1.5 s by default, ignoring lead-in/tail silence and keeping at
 least 30 s between suggestions). Both settings can be changed per file in the review bar;
 **Re-detect** replaces the unreviewed suggestions and keeps every confirmed split.
+
+Detection also tags every quiet stretch as *silence* (hatched red on the waveforms), including
+the lead-in and the tail. Where a silence touches a track's edge (around a split, or at the
+start/end of the recording) it is cut from the export by default: tracks start just before the
+music and stop just after it, keeping 0.25 s of the silence on each side so quiet attacks and
+decays survive. **G** keeps a silence (green) or cuts it again. Silence inside a track (a
+suggestion you deleted) is shown faintly and never cut, and a track that is nothing but cut
+silence is skipped. Splits don't move: only what gets exported changes, and the track list
+shows each track's length after the cut.
 
 All edits are saved to `splitter.cutlist.json` in the recordings folder, right after each change.
 Split positions are sample frames at the file's own rate, keyed by file name. The review loop

@@ -2,6 +2,7 @@
 //!
 //! Positions are sample frames at the recording's own sample rate. Track `k` runs from split
 //! `k-1` (or the start) to split `k` (or the end), so tracks never overlap or leave gaps.
+//! Silence tagged by detection is cut from a track's edges on export unless the user keeps it.
 
 use crate::Status;
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,17 @@ impl Split {
     }
 }
 
+/// A quiet stretch found by detection, `[start, end)`. Where it touches a track's edge (the
+/// recording's lead-in or tail, or the gap around a split) that part is cut from the export,
+/// unless `keep` is set. Silence in the middle of a track is never cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Silence {
+    pub start: u64,
+    pub end: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep: bool,
+}
+
 /// One track as shown and exported: `[start, end)` plus its metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track<'a> {
@@ -60,7 +72,22 @@ pub struct Track<'a> {
     pub index: usize,
     pub start: u64,
     pub end: u64,
+    /// What gets exported: `[start, end)` minus the silence cut at either edge. Empty when the
+    /// whole track is cut silence.
+    pub audio_start: u64,
+    pub audio_end: u64,
     pub meta: &'a TrackMeta,
+}
+
+impl Track<'_> {
+    pub fn audio_len(&self) -> u64 {
+        self.audio_end.saturating_sub(self.audio_start)
+    }
+
+    /// Not left out, and not all cut silence.
+    pub fn exported(&self) -> bool {
+        !self.meta.drop && self.audio_len() > 0
+    }
 }
 
 /// The undoable part of an edit.
@@ -68,6 +95,7 @@ pub struct Track<'a> {
 pub struct Snapshot {
     pub head: TrackMeta,
     pub splits: Vec<Split>,
+    pub silences: Vec<Silence>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,6 +129,12 @@ pub struct RecordingEdit {
     /// Sorted by `at`, no duplicates, all strictly inside the recording.
     #[serde(default)]
     pub splits: Vec<Split>,
+    /// Sorted, non-overlapping.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub silences: Vec<Silence>,
+    /// Whether `silences` has been filled in (cutlists from before silence tagging lack it).
+    #[serde(default)]
+    pub silences_detected: bool,
 }
 
 impl RecordingEdit {
@@ -170,6 +204,21 @@ impl RecordingEdit {
         (confirmed, self.splits.len() - confirmed)
     }
 
+    /// Replace the tagged silences. One the user chose to keep stays kept if it overlaps a new one.
+    pub fn set_silences(&mut self, mut silences: Vec<Silence>) {
+        for s in &mut silences {
+            s.keep = self.silences.iter().any(|o| o.keep && o.start < s.end && s.start < o.end);
+        }
+        self.silences = silences;
+        self.silences_detected = true;
+    }
+
+    /// The silence containing `pos`.
+    pub fn silence_at(&self, pos: u64) -> Option<usize> {
+        let i = self.silences.partition_point(|s| s.end <= pos);
+        self.silences.get(i).is_some_and(|s| s.start <= pos).then_some(i)
+    }
+
     /// Replace all unreviewed suggestions with `suggestions`, dropping any that land within
     /// `min_gap` of a confirmed split (the user already decided that area).
     /// A title or drop flag on a replaced suggestion carries over to a new one nearby.
@@ -224,7 +273,19 @@ impl RecordingEdit {
     pub fn tracks(&self, total: u64) -> Vec<Track<'_>> {
         let starts = std::iter::once((0, &self.head)).chain(self.splits.iter().map(|s| (s.at.min(total), &s.track)));
         let ends = self.splits.iter().map(|s| s.at.min(total)).chain(std::iter::once(total));
-        starts.zip(ends).enumerate().map(|(index, ((start, meta), end))| Track { index, start, end, meta }).collect()
+        starts
+            .zip(ends)
+            .enumerate()
+            .map(|(index, ((start, meta), end))| {
+                let cut =
+                    |f: fn(&Silence, u64) -> bool, at: u64| self.silences.iter().find(|s| !s.keep && f(s, at)).copied();
+                // A silence cuts the start of a track if the track starts inside it, and the end
+                // if the track ends inside it (a split in a gap does both, for its two tracks).
+                let audio_start = cut(|s, at| s.start <= at && at < s.end, start).map_or(start, |s| s.end.min(end));
+                let audio_end = cut(|s, at| s.start < at && at <= s.end, end).map_or(end, |s| s.start.max(start));
+                Track { index, start, end, audio_start, audio_end: audio_end.max(audio_start), meta }
+            })
+            .collect()
     }
 
     pub fn track_meta_mut(&mut self, index: usize) -> Option<&mut TrackMeta> {
@@ -244,7 +305,7 @@ impl RecordingEdit {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { head: self.head.clone(), splits: self.splits.clone() }
+        Snapshot { head: self.head.clone(), splits: self.splits.clone(), silences: self.silences.clone() }
     }
 }
 
@@ -278,6 +339,7 @@ impl History {
         let at = first_difference(&old.splits, &prev.splits);
         edit.head = prev.head;
         edit.splits = prev.splits;
+        edit.silences = prev.silences;
         self.future.push(old);
         Some(at)
     }
@@ -288,6 +350,7 @@ impl History {
         let at = first_difference(&old.splits, &next.splits);
         edit.head = next.head;
         edit.splits = next.splits;
+        edit.silences = next.silences;
         self.past.push(old);
         Some(at)
     }
@@ -360,6 +423,36 @@ mod tests {
         assert_eq!(e.current_track(None, 10), 1);
         assert_eq!(e.current_track(None, 9), 0);
         assert_eq!(e.current_track(Some(1), 0), 2);
+    }
+
+    #[test]
+    fn silence_is_cut_from_track_edges() {
+        let mut e = RecordingEdit::default();
+        e.insert(sugg(50));
+        e.set_silences(vec![
+            Silence { start: 0, end: 5, keep: false },    // lead-in
+            Silence { start: 20, end: 25, keep: false },  // inside track 0: stays
+            Silence { start: 45, end: 55, keep: false },  // around the split
+            Silence { start: 90, end: 100, keep: false }, // tail
+        ]);
+        let audio: Vec<(u64, u64)> = e.tracks(100).iter().map(|t| (t.audio_start, t.audio_end)).collect();
+        assert_eq!(audio, [(5, 45), (55, 90)]);
+        let bounds: Vec<(u64, u64)> = e.tracks(100).iter().map(|t| (t.start, t.end)).collect();
+        assert_eq!(bounds, [(0, 50), (50, 100)], "splits are unchanged");
+
+        // Keeping the gap's silence puts it back in both tracks.
+        let i = e.silence_at(50).unwrap();
+        e.silences[i].keep = true;
+        let audio: Vec<(u64, u64)> = e.tracks(100).iter().map(|t| (t.audio_start, t.audio_end)).collect();
+        assert_eq!(audio, [(5, 50), (50, 90)]);
+
+        // A track that is all silence ends up empty; re-detecting keeps the user's choice.
+        e.insert(sugg(95));
+        assert_eq!(e.tracks(100)[2].audio_len(), 0);
+        e.set_silences(vec![Silence { start: 46, end: 54, keep: false }]);
+        assert!(e.silences[0].keep);
+        assert_eq!(e.silence_at(45), None);
+        assert_eq!(e.silence_at(54), None);
     }
 
     #[test]

@@ -208,7 +208,7 @@ pub fn plan(
     source_stem: &str,
     settings: &ExportSettings,
 ) -> Vec<PlannedTrack> {
-    let kept: Vec<_> = edit.tracks(total_samples).into_iter().filter(|t| !t.meta.drop && t.end > t.start).collect();
+    let kept: Vec<_> = edit.tracks(total_samples).into_iter().filter(|t| t.exported()).collect();
     let total = kept.len();
     let width = total.to_string().len().max(2);
     let mut out: Vec<PlannedTrack> = Vec::with_capacity(total);
@@ -227,7 +227,7 @@ pub fn plan(
         if out.iter().any(|p| p.stem.eq_ignore_ascii_case(&stem)) {
             stem = format!("{stem} ({number})");
         }
-        out.push(PlannedTrack { number, total, start: t.start, end: t.end, title, stem });
+        out.push(PlannedTrack { number, total, start: t.audio_start, end: t.audio_end, title, stem });
     }
     out
 }
@@ -269,6 +269,20 @@ mod tests {
         let names: Vec<&str> = p.iter().map(|t| t.stem.as_str()).collect();
         assert_eq!(names, ["01 - Intro", "02 - AC_DC_ Live_", "03 - Track 3"]);
         assert_eq!((p[1].start, p[1].end, p[1].total), (200, 300, 3));
+    }
+
+    #[test]
+    fn cuts_silence_and_skips_silent_tracks() {
+        use crate::edit::Silence;
+        let mut e = RecordingEdit::default();
+        for at in [100, 150, 250] {
+            e.insert(Split::confirmed(at));
+        }
+        // A long pause between two songs, with a split at each end of it.
+        e.set_silences(vec![Silence { start: 90, end: 160, keep: false }]);
+        let p = plan(&e, 400, "set", &ExportSettings::default());
+        let bounds: Vec<(u64, u64, usize)> = p.iter().map(|t| (t.start, t.end, t.number)).collect();
+        assert_eq!(bounds, [(0, 90, 1), (160, 250, 2), (250, 400, 3)]);
     }
 
     #[test]
