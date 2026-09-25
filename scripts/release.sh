@@ -13,12 +13,16 @@
 #   ./scripts/release.sh --minor    # bump minor  (0.3.1 → 0.4.0)
 #   ./scripts/release.sh --major    # bump major  (0.3.1 → 1.0.0)
 #   ./scripts/release.sh --dry-run  # show what would happen, don't do it
+#   ./scripts/release.sh --no-notes # release with nothing in CHANGELOG.md (build-only)
+#
+# Flags combine, e.g. `./scripts/release.sh --minor --dry-run`.
 
 set -euo pipefail
 
 CARGO="Cargo.toml"
 FORMULA="${FORMULA_PATH:-$HOME/code/homebrew-splitter/Formula/splitter.rb}"
 DRY_RUN=false
+ALLOW_NO_NOTES=false
 
 CARGO_VERSION=$(grep '^version' "$CARGO" | head -1 | sed 's/version = "\(.*\)"/\1/')
 
@@ -31,17 +35,21 @@ CURRENT="${LATEST_TAG:-$CARGO_VERSION}"
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
 # ── Compute target version ────────────────────────────────────────────────────
-case "${1:-}" in
-    --dry-run)            DRY_RUN=true; NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
-    --patch|"")           NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
-    --minor)              NEW="$MAJOR.$((MINOR + 1)).0" ;;
-    --major)              NEW="$((MAJOR + 1)).0.0" ;;
-    [0-9]*.[0-9]*.[0-9]*) NEW="$1" ;;
-    *)
-        echo "Usage: $0 [--patch|--minor|--major|--dry-run|<version>]"
-        exit 1
-        ;;
-esac
+NEW="$MAJOR.$MINOR.$((PATCH + 1))"
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)            DRY_RUN=true ;;
+        --no-notes)           ALLOW_NO_NOTES=true ;;
+        --patch)              NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+        --minor)              NEW="$MAJOR.$((MINOR + 1)).0" ;;
+        --major)              NEW="$((MAJOR + 1)).0.0" ;;
+        [0-9]*.[0-9]*.[0-9]*) NEW="$arg" ;;
+        *)
+            echo "Usage: $0 [--patch|--minor|--major|<version>] [--dry-run] [--no-notes]"
+            exit 1
+            ;;
+    esac
+done
 
 TAG="v$NEW"
 
@@ -92,6 +100,37 @@ else
 fi
 echo ""
 
+# ── Release notes ─────────────────────────────────────────────────────────────
+# CHANGELOG.md is what the GitHub Release body and the public releases page are
+# both built from, so a release with nothing written in it ships a version
+# number and no explanation. A build-only release is a real thing, and
+# --no-notes says so explicitly; anything else without notes is refused.
+CHANGELOG="CHANGELOG.md"
+NOTES_STATE="missing"
+if [[ -f "$CHANGELOG" ]]; then
+    if grep -q "^## \[$NEW\]" "$CHANGELOG"; then
+        NOTES_STATE="dated"
+    elif awk '/^## \[[Uu]nreleased\]/{f=1;next} /^## /{f=0} f && /^- /{found=1} END{exit !found}' "$CHANGELOG"; then
+        NOTES_STATE="unreleased"
+    fi
+fi
+
+case "$NOTES_STATE" in
+    dated)      echo "  Release notes: CHANGELOG.md already has a [$NEW] section" ;;
+    unreleased) echo "  Release notes: [Unreleased] → [$NEW] (dated $(date +%F))" ;;
+    missing)
+        if $ALLOW_NO_NOTES; then
+            echo "  ⚠️  Release notes: none — $TAG ships with no notes (--no-notes)"
+        else
+            echo "  ❌ Release notes: nothing under [Unreleased] in $CHANGELOG"
+            echo "     Add the entry (## [Unreleased] + ### Added/Changed/Fixed/Removed),"
+            echo "     or pass --no-notes for a build-only release."
+            $DRY_RUN || exit 1
+        fi
+        ;;
+esac
+echo ""
+
 $DRY_RUN && { echo "Dry run — nothing done."; exit 0; }
 
 if [[ -t 0 ]]; then
@@ -119,6 +158,18 @@ fi
 # with the manifest — otherwise CI's `cargo test --locked` fails on master
 # for every release.
 cargo metadata --format-version 1 --quiet >/dev/null
+
+# Stamp the notes with the version they are shipping in. CI can do this for
+# itself when generating the feed, but only the file in the repository is what
+# the next release reads, so the heading is settled here once.
+if [[ "$NOTES_STATE" == "unreleased" ]]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s/^## \[[Uu]nreleased\].*$/## [$NEW] - $(date +%F)/" "$CHANGELOG"
+    else
+        sed -i    "s/^## \[[Uu]nreleased\].*$/## [$NEW] - $(date +%F)/" "$CHANGELOG"
+    fi
+    git add "$CHANGELOG"
+fi
 
 git add "$CARGO" Cargo.lock
 git commit -m "chore: release $TAG"
