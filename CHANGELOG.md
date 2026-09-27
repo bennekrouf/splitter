@@ -15,6 +15,17 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- The version you are running now shows next to the Splitter name at the top
+  of the sidebar and in the window title, so it is at hand when you report a
+  problem or check whether an update installed.
+- A **Get Pro…** button at the top of the file list opens the licence window,
+  where you buy Splitter Pro or paste your key. It reads **Pro ✓** once your
+  licence is active. Clicking **Splitter** still opens the same window.
+
 ## [0.1.13] - 2026-09-27
 
 ### Changed

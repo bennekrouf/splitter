@@ -46,6 +46,8 @@ html, body {
 }
 .sidebar-head {
   display: flex;
+  flex-wrap: wrap; /* a narrow list puts the buttons on a second line, not off the edge */
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   padding: 12px;
@@ -582,6 +584,14 @@ button.brand {
   cursor: pointer;
 }
 button.brand:hover { color: var(--accent); }
+.brand-wrap { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.app-version {
+  font-size: 10px;
+  color: var(--dim);
+  opacity: 0.7;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .pro-badge {
   font-size: 10px;
   font-weight: 700;
@@ -607,3 +617,4 @@ button.pro-upsell {
   padding: 2px 8px;
 }
 button.pro-upsell:hover { background: var(--accent); color: var(--bg); }
+.head-actions button.pro-button { color: var(--accent); border-color: var(--accent); white-space: nowrap; }
