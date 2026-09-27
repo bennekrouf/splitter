@@ -15,6 +15,16 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Splitter Pro licences. Click **Splitter** at the top of the file list to
+  paste the licence key from your purchase email. The key is checked on your
+  computer, with no account and nothing sent anywhere, and a **Pro** badge
+  shows once it is active. **Remove from this computer** frees it for another
+  one.
+
 ## [0.1.9] - 2026-09-24
 
 ### Changed

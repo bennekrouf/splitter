@@ -86,6 +86,10 @@ pub struct App {
     pub ab_rx: Signal<Option<crossbeam_channel::Receiver<crate::ab::AbResult>>>,
     /// Text of the "Open URL" dialog while it's open.
     pub url_dialog: Signal<Option<String>>,
+    /// The Splitter Pro licence on this computer.
+    pub licence: Signal<crate::licence::Status>,
+    /// Key being typed in the licence dialog while it's open.
+    pub licence_dialog: Signal<Option<String>>,
     /// The yt-dlp download in progress, if any.
     pub download: Signal<Option<crate::download::Download>>,
     /// The last download's output, kept after it ends until closed.
@@ -132,6 +136,8 @@ impl App {
             ab: Signal::new(Default::default()),
             ab_rx: Signal::new(None),
             url_dialog: Signal::new(None),
+            licence: Signal::new(crate::licence::current()),
+            licence_dialog: Signal::new(None),
             download: Signal::new(None),
             download_log: Signal::new(None),
             error_since: Signal::new(None),

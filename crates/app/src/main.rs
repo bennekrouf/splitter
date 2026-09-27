@@ -5,6 +5,7 @@ mod ab;
 mod cleaning;
 mod download;
 mod exporting;
+mod licence;
 mod media_server;
 mod review;
 mod state;
