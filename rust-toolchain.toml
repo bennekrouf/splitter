@@ -1,0 +1,9 @@
+# The Rust version for every build: local, CI and releases. rustup installs it on first use.
+#
+# CI runs clippy with -D warnings, and each stable release brings new lints, so an unpinned
+# toolchain can turn CI red without a code change. Bump this on purpose, and fix whatever the
+# new clippy reports in the same change.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
