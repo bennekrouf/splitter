@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const CSS: &str = include_str!("../assets/style.css");
+/// Window title: the name and the running version, as in the other mayorana apps.
+pub const TITLE: &str = concat!("Splitter ", env!("CARGO_PKG_VERSION"));
 /// Waveform resolution; the SVG is stretched to the element width.
 const COLS: usize = 1600;
 /// How close (in pixels) a click must be to grab a split marker.
@@ -302,8 +304,8 @@ fn Sidebar() -> Element {
         let i = (app.selected)();
         let name = i.and_then(|i| app.recordings.peek().get(i).map(|r| r.name()));
         dioxus::desktop::window().set_title(&match name {
-            Some(n) => format!("{n} — Splitter"),
-            None => "Splitter".into(),
+            Some(n) => format!("{n} — {TITLE}"),
+            None => TITLE.into(),
         });
         document::eval(
             "requestAnimationFrame(() => document.querySelector('.item.selected')?.scrollIntoView({block: 'nearest'}))",
@@ -323,17 +325,21 @@ fn Sidebar() -> Element {
                 ondoubleclick: move |_| app.fit_sidebar(),
             }
             div { class: "sidebar-head",
-                button {
-                    class: "brand",
-                    title: "Splitter Pro licence",
-                    onclick: move |_| {
-                        let mut dialog = app.licence_dialog;
-                        dialog.set(Some(String::new()));
-                    },
-                    "Splitter"
-                    if matches!(*app.licence.read(), crate::licence::Status::Pro(_)) {
-                        span { class: "pro-badge", "Pro" }
+                div { class: "brand-wrap",
+                    button {
+                        class: "brand",
+                        title: "Splitter Pro licence",
+                        onclick: move |_| {
+                            let mut dialog = app.licence_dialog;
+                            dialog.set(Some(String::new()));
+                        },
+                        "Splitter"
+                        if matches!(*app.licence.read(), crate::licence::Status::Pro(_)) {
+                            span { class: "pro-badge", "Pro" }
+                        }
                     }
+                    // Which build is running, for bug reports and support.
+                    span { class: "app-version", { concat!("v", env!("CARGO_PKG_VERSION")) } }
                 }
                 div { class: "head-actions",
                     button { title: "Open a folder of recordings (⌘O)", onclick: move |_| open_folder(app), "Open folder…" }
@@ -342,6 +348,24 @@ fn Sidebar() -> Element {
                         disabled: app.download.read().is_some(),
                         onclick: move |_| app.ask_url(),
                         "URL…"
+                    }
+                    {
+                        let (label, title) = match *app.licence.read() {
+                            crate::licence::Status::Pro(_) => ("Pro ✓", "Splitter Pro is active on this computer"),
+                            crate::licence::Status::Renew(_) => ("Renew Pro…", "Your Pro updates ended before this version: renew or paste a new key"),
+                            _ => ("Get Pro…", "Buy Splitter Pro, or paste your licence key"),
+                        };
+                        rsx! {
+                            button {
+                                class: "pro-button",
+                                title: "{title}",
+                                onclick: move |_| {
+                                    let mut dialog = app.licence_dialog;
+                                    dialog.set(Some(String::new()));
+                                },
+                                "{label}"
+                            }
+                        }
                     }
                 }
             }
