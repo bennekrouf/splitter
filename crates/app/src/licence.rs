@@ -31,9 +31,11 @@ pub enum Status {
 }
 
 impl Status {
-    #[allow(dead_code)] // for the features Pro unlocks
-    pub fn is_pro(&self) -> bool {
-        matches!(self, Status::Pro(_))
+    /// Whether exports write every track. A build that can't check licences isn't
+    /// limited either: that is a local build from source, or a release missing its key,
+    /// and neither should lock out someone who paid.
+    pub fn exports_all(&self) -> bool {
+        matches!(self, Status::Pro(_) | Status::Unavailable)
     }
 }
 

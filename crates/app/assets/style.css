@@ -600,3 +600,10 @@ button.brand:hover { color: var(--accent); }
   padding: 0 6px;
 }
 .button-link:hover { text-decoration: underline; }
+button.pro-upsell {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 2px 8px;
+}
+button.pro-upsell:hover { background: var(--accent); color: var(--bg); }

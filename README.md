@@ -98,7 +98,12 @@ it says it can't check licences. The key is saved to the config folder (`splitte
 
 A licence unlocks every release dated up to its `updates_until`; the build's date is
 `SPLITTER_RELEASE_DATE` if set, else the date of the commit it's built from (see
-`crates/app/build.rs`). Nothing is locked behind Pro yet.
+`crates/app/build.rs`).
+
+Without Pro an export writes the first 10 kept tracks of a recording (`FREE_TRACKS` in
+`crates/core/src/license.rs`); splitting and reviewing are never limited, and the tags of the
+tracks written keep the recording's real track count. A build without the public key isn't
+limited.
 
 ## Keys
 

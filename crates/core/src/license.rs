@@ -20,6 +20,19 @@ use serde::Deserialize;
 /// The product name in every Splitter licence.
 pub const PRODUCT: &str = "splitter";
 
+/// How many tracks of one recording the free version exports. Splitting and reviewing
+/// are never limited: a free user sees every track found, and Pro exports them all.
+pub const FREE_TRACKS: usize = 10;
+
+/// How many of a recording's `kept` tracks an export writes.
+pub fn exported_tracks(kept: usize, pro: bool) -> usize {
+    if pro {
+        kept
+    } else {
+        kept.min(FREE_TRACKS)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct License {
     pub id: String,
@@ -147,6 +160,14 @@ mod tests {
         let license = verify(SERVER_ISSUED, &public).unwrap();
         assert_eq!(license.id, "lic_fixture");
         assert_eq!(license.updates_until, "2027-09-27");
+    }
+
+    #[test]
+    fn the_free_version_exports_the_first_ten_tracks() {
+        assert_eq!(exported_tracks(6, false), 6);
+        assert_eq!(exported_tracks(10, false), 10);
+        assert_eq!(exported_tracks(18, false), 10);
+        assert_eq!(exported_tracks(18, true), 18);
     }
 
     #[test]
