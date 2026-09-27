@@ -648,6 +648,10 @@ fn LicenceDialog() -> Element {
                         p { class: "dim", "This build of Splitter can't check licences. Download it from mayorana.ch to use one." }
                     },
                     Status::Free => rsx! {
+                        p {
+                            "The free version exports the first {splitter_core::license::FREE_TRACKS} tracks of each recording. "
+                            "Splitter Pro exports all of them."
+                        }
                         p { class: "dim",
                             "Paste the licence key from the email you received after buying Splitter Pro. "
                             "It's checked on this computer; nothing is sent anywhere."
@@ -1415,9 +1419,14 @@ fn ExportBar(scan: ScanRef) -> Element {
     let key = key_of(&path);
     let Some(edit) = cutlist.recordings.get(&key) else { return rsx! {} };
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let planned = plan(edit, scan.0.info.total_samples, &stem, &cutlist.export);
+    let mut planned = plan(edit, scan.0.info.total_samples, &stem, &cutlist.export);
+    let kept = planned.len();
+    let dropped = edit.splits.len() + 1 - kept;
+    // Without Pro the export stops after the first tracks; the size, loudness and count
+    // below describe what is actually written.
+    planned.truncate(splitter_core::license::exported_tracks(kept, app.licence.read().exports_all()));
     let count = planned.len();
-    let dropped = edit.splits.len() + 1 - count;
+    let beyond_free = kept - count;
     let status = app.exports.read().get(&key).cloned();
     let running = status.as_ref().is_some_and(|s| s.is_active());
     let profile = cutlist.export.profile;
@@ -1517,9 +1526,26 @@ fn ExportBar(scan: ScanRef) -> Element {
                 }
             }
             span { class: "dim",
-                if video { "{count} clips" } else { "{count} tracks · ≈ {size}" }
+                if beyond_free > 0 {
+                    if video { "{count} of {kept} clips" } else { "{count} of {kept} tracks · ≈ {size}" }
+                } else if video {
+                    "{count} clips"
+                } else {
+                    "{count} tracks · ≈ {size}"
+                }
                 if dropped > 0 { " · {dropped} left out" }
                 " → {stem}/*.{ext}"
+            }
+            if beyond_free > 0 {
+                button {
+                    class: "pro-upsell",
+                    title: "The free version exports the first {splitter_core::license::FREE_TRACKS} tracks of a recording",
+                    onclick: move |_| {
+                        let mut dialog = app.licence_dialog;
+                        dialog.set(Some(String::new()));
+                    },
+                    "Splitter Pro exports all {kept} →"
+                }
             }
             match set {
                 Some(Loudness { lufs: Some(l), peak_db }) => rsx! {

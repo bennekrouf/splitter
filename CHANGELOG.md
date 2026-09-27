@@ -15,6 +15,16 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- Without Splitter Pro, an export now writes the first 10 tracks of each
+  recording. Splitting, reviewing and naming are not limited: when a recording
+  has more tracks, the export bar says how many and **Splitter Pro exports all**
+  opens the licence window. A vinyl side, an EP or a short set still fits in
+  the free version; with Pro, every track is exported, as before.
+
 ## [0.1.12] - 2026-09-27
 
 ### Added

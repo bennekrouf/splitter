@@ -10,6 +10,7 @@ use splitter_audio::export::{can_copy, export, ExportJob, Tags};
 use splitter_audio::loudness::{apply_to_jobs, load_or_analyze, LoudnessMap};
 use splitter_audio::{Bitrate, Scan};
 use splitter_core::export::{plan, Normalize, Profile, SourceFacts, VideoProfile};
+use splitter_core::license::exported_tracks;
 use splitter_core::Status;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -198,10 +199,12 @@ impl App {
             Some(v) => v.extension().to_string(),
             None => profile.extension(&src_ext).to_string(),
         };
-        let planned = match self.cutlist.peek().recordings.get(&key) {
+        let mut planned = match self.cutlist.peek().recordings.get(&key) {
             Some(edit) => plan(edit, scan.info.total_samples, &stem, &settings),
             None => plan(&Default::default(), scan.info.total_samples, &stem, &settings),
         };
+        // Without Pro, the first tracks only; their tags keep the recording's real total.
+        planned.truncate(exported_tracks(planned.len(), self.licence.peek().exports_all()));
         if planned.is_empty() {
             self.exports.write().insert(key, ExportStatus::Failed("every track is left out".into()));
             return false;
