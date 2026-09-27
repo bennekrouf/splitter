@@ -566,3 +566,37 @@ select.profile {
   cursor: pointer;
 }
 .update-banner-dismiss:hover { opacity: 1; }
+
+/* Licence */
+button.brand {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+button.brand:hover { color: var(--accent); }
+.pro-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--bg);
+  background: var(--accent);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.modal textarea.licence-key { word-break: break-all; user-select: text; -webkit-user-select: text; }
+.modal-actions .left { margin-right: auto; }
+.button-link {
+  color: var(--accent);
+  text-decoration: none;
+  align-self: center;
+  padding: 0 6px;
+}
+.button-link:hover { text-decoration: underline; }

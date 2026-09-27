@@ -24,6 +24,8 @@ rfd = "0.15"
 flacenc = "0.5"
 ebur128 = "0.1"
 mp3lame-encoder = "0.2"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.22"
 
 # Decoding and peak building are far too slow unoptimised; keep debug builds usable.
 [profile.dev.package."*"]

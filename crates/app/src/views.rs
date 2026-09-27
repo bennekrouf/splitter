@@ -66,6 +66,7 @@ pub fn App() -> Element {
         if app.paste.peek().is_some()
             || app.editing_title.peek().is_some()
             || app.url_dialog.peek().is_some()
+            || app.licence_dialog.peek().is_some()
             || *app.renaming.peek()
             || app.confirm_delete.peek().is_some()
         {
@@ -255,6 +256,7 @@ pub fn App() -> Element {
             main { class: "main", Editor {} }
             UrlDialog {}
             DeleteDialog {}
+            LicenceDialog {}
         }
         // Dismissed for this session only: the next launch asks again.
         if let Some(info) = update() {
@@ -321,7 +323,18 @@ fn Sidebar() -> Element {
                 ondoubleclick: move |_| app.fit_sidebar(),
             }
             div { class: "sidebar-head",
-                span { class: "brand", "Splitter" }
+                button {
+                    class: "brand",
+                    title: "Splitter Pro licence",
+                    onclick: move |_| {
+                        let mut dialog = app.licence_dialog;
+                        dialog.set(Some(String::new()));
+                    },
+                    "Splitter"
+                    if matches!(*app.licence.read(), crate::licence::Status::Pro(_)) {
+                        span { class: "pro-badge", "Pro" }
+                    }
+                }
                 div { class: "head-actions",
                     button { title: "Open a folder of recordings (⌘O)", onclick: move |_| open_folder(app), "Open folder…" }
                     button {
@@ -580,6 +593,122 @@ fn ApplyCuts() -> Element {
 }
 
 /// "Move to the Trash?" for a recording in the file list. Enter confirms, Esc cancels.
+#[component]
+fn LicenceDialog() -> Element {
+    use crate::licence::{self, Status};
+    let app = use_context::<state::App>();
+    let mut problem = use_signal(|| Option::<String>::None);
+    let Some(text) = (app.licence_dialog)() else { return rsx! {} };
+    let status = app.licence.read().clone();
+    let mut dialog = app.licence_dialog;
+    let close = move || {
+        let mut dialog = app.licence_dialog;
+        dialog.set(None);
+        let mut problem = problem;
+        problem.set(None);
+        app.focus_root();
+    };
+    let activate = move || {
+        let key = app.licence_dialog.peek().clone().unwrap_or_default();
+        let mut problem = problem;
+        match licence::activate(&key) {
+            Ok(s) => {
+                let mut licence = app.licence;
+                licence.set(s);
+                let mut dialog = app.licence_dialog;
+                dialog.set(Some(String::new()));
+                problem.set(None);
+            }
+            Err(e) => problem.set(Some(e)),
+        }
+    };
+    let remove = move |_| {
+        licence::deactivate();
+        let mut licence = app.licence;
+        licence.set(Status::Free);
+    };
+
+    rsx! {
+        div { class: "modal-backdrop", onclick: move |_| close(),
+            div { class: "modal", onclick: move |e| e.stop_propagation(),
+                h2 { "Splitter Pro" }
+                match &status {
+                    Status::Pro(l) => rsx! {
+                        p { "Licensed to " strong { "{l.email}" } "." }
+                        p { class: "dim", "Includes every update released until {l.updates_until}." }
+                    },
+                    Status::Renew(l) => rsx! {
+                        p { "Licensed to " strong { "{l.email}" } "." }
+                        p { class: "match todo",
+                            "This version was released on {licence::release_date()}, after your updates ended on "
+                            "{l.updates_until}. Renew to use it, or keep using a version released before that day."
+                        }
+                    },
+                    Status::Unavailable => rsx! {
+                        p { class: "dim", "This build of Splitter can't check licences. Download it from mayorana.ch to use one." }
+                    },
+                    Status::Free => rsx! {
+                        p { class: "dim",
+                            "Paste the licence key from the email you received after buying Splitter Pro. "
+                            "It's checked on this computer; nothing is sent anywhere."
+                        }
+                    },
+                }
+                if matches!(status, Status::Free | Status::Renew(_)) {
+                    textarea {
+                        class: "licence-key",
+                        value: "{text}",
+                        rows: "4",
+                        spellcheck: "false",
+                        placeholder: "eyJ2Ijox…",
+                        onmounted: move |e| async move {
+                            let _ = e.set_focus(true).await;
+                        },
+                        oninput: move |e| {
+                            problem.set(None);
+                            dialog.set(Some(e.value()));
+                        },
+                        onkeydown: move |e| {
+                            e.stop_propagation();
+                            match e.key() {
+                                Key::Escape => close(),
+                                Key::Enter => {
+                                    e.prevent_default();
+                                    activate();
+                                }
+                                _ => {}
+                            }
+                        },
+                    }
+                }
+                if let Some(p) = problem() {
+                    p { class: "match todo", "{p}" }
+                }
+                div { class: "modal-actions",
+                    match &status {
+                        Status::Pro(_) | Status::Renew(_) => rsx! {
+                            button { class: "left", title: "Remove the licence from this computer, e.g. to use it on another one", onclick: remove, "Remove from this computer" }
+                        },
+                        _ => rsx! {},
+                    }
+                    if !matches!(status, Status::Pro(_)) {
+                        a { class: "button-link", href: "{licence::BUY_URL}", target: "_blank",
+                            if matches!(status, Status::Renew(_)) { "Renew…" } else { "Buy Splitter Pro…" }
+                        }
+                    }
+                    button { onclick: move |_| close(), if matches!(status, Status::Pro(_)) { "Close" } else { "Cancel" } }
+                    if matches!(status, Status::Free | Status::Renew(_)) {
+                        button { class: "primary", disabled: text.trim().is_empty(), onclick: move |_| activate(),
+                            "Activate"
+                            kbd { "Enter" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn DeleteDialog() -> Element {
     let app = use_context::<state::App>();

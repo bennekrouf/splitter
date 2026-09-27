@@ -23,6 +23,7 @@ sha2 = "0.11.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Deleting a recording from the file list moves it to the system Trash, so it can be restored.
 trash = "5.2"
+base64.workspace = true
 
 [dev-dependencies]
 symphonia.workspace = true

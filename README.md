@@ -88,6 +88,18 @@ Scan and seek timings on any file:
 cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min.mp3
 ```
 
+## Pro licence
+
+Click **Splitter** (top of the file list) to paste a Splitter Pro licence key. The key is
+checked offline: api0's store signs it with an Ed25519 key when the Stripe Checkout is paid,
+and the app verifies it with the public half, built in from the `SPLITTER_LICENSE_PUBLIC_KEY`
+repository variable (standard base64, 32 bytes) by the release workflow. A local build without
+it says it can't check licences. The key is saved to the config folder (`splitter/licence`).
+
+A licence unlocks every release dated up to its `updates_until`; the build's date is
+`SPLITTER_RELEASE_DATE` if set, else the date of the commit it's built from (see
+`crates/app/build.rs`). Nothing is locked behind Pro yet.
+
 ## Keys
 
 **Reviewing splits**
