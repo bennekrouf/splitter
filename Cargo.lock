@@ -5039,7 +5039,7 @@ dependencies = [
 
 [[package]]
 name = "splitter"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -5062,7 +5062,7 @@ dependencies = [
 
 [[package]]
 name = "splitter-audio"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "splitter-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
