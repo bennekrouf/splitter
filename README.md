@@ -239,7 +239,10 @@ Same setup as GitAgent and the ais-* apps.
   runtime; release CI turns it into `icon.icns` (macOS) and `icon.ico` (Windows, embedded in
   the .exe by `crates/app/build.rs`), and ships the PNG for the Linux launcher.
 - **CI** (`.github/workflows/ci.yml`, on pull requests): `cargo fmt --check`, tests, and clippy
-  with warnings as errors.
+  with warnings as errors, on Linux and Windows.
+- **Rust version**: pinned in `rust-toolchain.toml` (rustup installs it on first use); CI and
+  releases install the same one. New stable releases bring new clippy lints, so bump it on
+  purpose and fix what the new clippy reports in the same change.
 - **Release** (`.github/workflows/release.yml`, on a `v*` tag or run by hand from the Actions
   tab): a signed and notarized `.dmg` for Apple Silicon, a signed Inno Setup installer for
   Windows (`installer/installer.iss`), and a Linux x86_64 tarball with `scripts/setup-linux.sh`

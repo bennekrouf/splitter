@@ -89,9 +89,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
+      # Installs the version rust-toolchain.toml pins (plus the Apple Silicon target).
+      - run: rustup toolchain install && rustup target add aarch64-apple-darwin
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -100,7 +99,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-macos-arm64-cargo-${{ hashFiles('Cargo.lock') }}
+          key: release-macos-arm64-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       # ── Sanity-check required signing secrets up front ─────────────────────
       - name: Check macOS signing secrets
@@ -289,7 +288,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Installs the version and components rust-toolchain.toml pins.
+      - run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -298,7 +298,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-windows-cargo-${{ hashFiles('Cargo.lock') }}
+          key: release-windows-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       # ── Generate crates/app/assets/icon.ico from icon.png (ImageMagick is
       # preinstalled on windows-latest as `magick`). No-op if PNG missing;
@@ -437,7 +437,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Installs the version and components rust-toolchain.toml pins.
+      - run: rustup toolchain install
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -446,7 +447,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-linux-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+          key: release-linux-x86_64-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Install build dependencies
         run: |
