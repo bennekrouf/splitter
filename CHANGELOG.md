@@ -46,6 +46,18 @@ user sees in the update prompt should all be accounted for.
   shows once it is active. **Remove from this computer** frees it for another
   one.
 
+## [0.1.11] - 2026-09-27
+
+### Changed
+
+- Packaging only — no user-visible change.
+
+## [0.1.10] - 2026-09-25
+
+### Changed
+
+- Packaging only — no user-visible change.
+
 ## [0.1.9] - 2026-09-24
 
 ### Changed
