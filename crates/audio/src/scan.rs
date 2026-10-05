@@ -3,7 +3,7 @@
 
 use crate::mp3index::Mp3Index;
 use crate::peaks::{AnalysisBuilder, Loudness, Peaks};
-use crate::source::Decoding;
+use crate::source::{Decoding, Silence};
 use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,8 @@ pub enum Bitrate {
     /// Average of a compressed stream other than MP3 (e.g. AAC in a video), measured from its
     /// packets, so a video's picture doesn't count.
     Avg(u32),
+    /// A video without sound.
+    None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +42,9 @@ pub struct SourceInfo {
     pub total_samples: u64,
     pub file_size: u64,
     pub bitrate: Bitrate,
+    /// A video without sound: its timeline is silence as long as the picture, and nothing in
+    /// it is detected.
+    pub silent: bool,
 }
 
 impl SourceInfo {
@@ -58,6 +63,9 @@ pub struct Scan {
 
 pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
     let file_size = std::fs::metadata(path)?.len();
+    if let Some(secs) = crate::mp4::silent_video_secs(path) {
+        return Ok(silent_scan(secs, file_size));
+    }
     let is_mp3 = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
     let mp3 = if is_mp3 { Some(Mp3Index::build(path)?) } else { None };
     progress(0.02);
@@ -120,14 +128,38 @@ pub fn scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> {
     };
 
     Ok(Scan {
-        info: SourceInfo { codec, sample_rate, channels: channels as u16, total_samples: total, file_size, bitrate },
+        info: SourceInfo {
+            codec,
+            sample_rate,
+            channels: channels as u16,
+            total_samples: total,
+            file_size,
+            bitrate,
+            silent: false,
+        },
         mp3,
         peaks,
         loudness,
     })
 }
 
-const SCAN_MAGIC: &[u8; 8] = b"SPLTIDX1";
+/// A video without sound: no waveform (it draws flat) and no loudness, so no silence is found
+/// in it and every split is placed by hand.
+fn silent_scan(secs: f64, file_size: u64) -> Scan {
+    let info = SourceInfo {
+        codec: "No sound".into(),
+        sample_rate: Silence::RATE,
+        channels: 1,
+        total_samples: Silence::frames(secs),
+        file_size,
+        bitrate: Bitrate::None,
+        silent: true,
+    };
+    let window = (Silence::RATE / 20) as u64;
+    Scan { info, mp3: None, peaks: Peaks { levels: Vec::new() }, loudness: Loudness { window, db: Vec::new() } }
+}
+
+const SCAN_MAGIC: &[u8; 8] = b"SPLTIDX2";
 
 /// Identifies the exact file a cache entry was computed from.
 #[derive(PartialEq, Serialize, Deserialize)]

@@ -44,9 +44,11 @@ impl Kind {
     fn formats(self) -> &'static str {
         match self {
             Kind::Audio => "ba[ext=m4a]/ba[ext=mp3]",
-            // Separate picture and sound merged ("+"), or a file that already has both.
+            // Separate picture and sound merged ("+"), or a file that already has both, or
+            // last, the picture alone: some videos (often on X) are posted without sound.
             Kind::Video => {
-                "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+                "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a]\
+                 /bv*[ext=mp4][vcodec^=avc1][height<=1080]"
             }
         }
     }
@@ -198,6 +200,9 @@ fn run(
         (_, Some(s)) => return Err(format!("yt-dlp stopped ({s}) without producing a file")),
         (_, None) => return Err("yt-dlp stopped without producing a file".into()),
     };
+    if kind == Kind::Video && splitter_audio::mp4::silent_video_secs(&file).is_some() {
+        log("This video has no sound: split it by hand with M.".into());
+    }
     if kind == Kind::Video || !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a")) {
         return Ok(file); // MP3 or a video: the app plays and exports it directly
     }
@@ -262,7 +267,10 @@ fn parse_progress(line: &str) -> Option<Phase> {
 fn explain(err: &str, kind: Kind) -> String {
     let hint = if err.contains("Requested format is not available") {
         match kind {
-            Kind::Audio => " — this site offers no M4A or MP3 audio for it",
+            Kind::Audio => {
+                " — this site offers no M4A or MP3 audio for it. If the video has no sound, pick Video \
+                 to cut its picture"
+            }
             Kind::Video => " — this site offers no H.264 MP4 video for it; try Audio",
         }
     } else if err.contains("members-only") || err.contains("Join this channel") {

@@ -15,6 +15,18 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Videos without sound can be cut. They open like any other video, with the
+  picture shown and a flat timeline, and you place every split yourself with
+  **M**, since there is no silence to find. Their clips, and the copy that
+  **Apply cuts** makes, are picture only.
+- **URL…** with **Video** now downloads videos posted without sound, as is
+  common on X, instead of failing. Asking for **Audio** on such a video now
+  says to pick **Video** instead.
+
 ## [0.1.15] - 2026-09-28
 
 ### Changed

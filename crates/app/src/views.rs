@@ -960,20 +960,26 @@ fn Info(scan: ScanRef) -> Element {
         Bitrate::Pcm { kbps, .. } => format!("{kbps} kbps"),
         Bitrate::Avg(k) => format!("~{k} kbps"),
         Bitrate::Unknown => "bitrate unknown".into(),
+        Bitrate::None => String::new(),
     };
     let channels = match i.channels {
         1 => "mono".to_string(),
         2 => "stereo".to_string(),
         n => format!("{n} ch"),
     };
-    let chips = [
-        i.codec.clone(),
-        bitrate,
-        format!("{:.1} kHz", i.sample_rate as f64 / 1000.0),
-        channels,
-        fmt_short(i.duration_secs()),
-        format!("{:.1} MB", i.file_size as f64 / 1_048_576.0),
-    ];
+    let size = format!("{:.1} MB", i.file_size as f64 / 1_048_576.0);
+    // A video without sound has no audio format to describe.
+    let chips = match i.silent {
+        true => vec![i.codec.clone(), fmt_short(i.duration_secs()), size],
+        false => vec![
+            i.codec.clone(),
+            bitrate,
+            format!("{:.1} kHz", i.sample_rate as f64 / 1000.0),
+            channels,
+            fmt_short(i.duration_secs()),
+            size,
+        ],
+    };
     rsx! {
         div { class: "info",
             for chip in chips {
