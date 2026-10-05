@@ -17,6 +17,10 @@ pub use splitter_core::loudness::LoudnessMap;
 const MAGIC: &[u8; 8] = b"SPLTLUD1";
 
 pub fn analyze(path: &Path, scan: &Scan, progress: &mut dyn FnMut(f32)) -> Result<LoudnessMap> {
+    if scan.info.silent {
+        // Nothing to measure: no loudness, so no gain and no ReplayGain.
+        return Ok(LoudnessMap { hop: (scan.info.sample_rate / 10).max(1) as u64, ..Default::default() });
+    }
     let mut src = open_source(path, scan.mp3.clone().map(Arc::new))?;
     let ch = src.channels();
     let rate = src.sample_rate();

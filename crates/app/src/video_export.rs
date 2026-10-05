@@ -3,6 +3,7 @@
 //!
 //! Positions come in as our sample frames and go to ffmpeg as seconds on the video's own
 //! timeline, which skips the AAC priming we decode (`splitter_audio::mp4`).
+//! A video without sound gives clips and copies without sound.
 
 use splitter_audio::export::Tags;
 use splitter_core::export::VideoProfile;
@@ -43,12 +44,19 @@ pub struct Clip<'a> {
     pub gain_db: f64,
 }
 
+/// Whether `source` has a sound track to carry over.
+fn has_sound(source: &Path) -> bool {
+    splitter_audio::mp4::silent_video_secs(source).is_none()
+}
+
 /// Encoding settings shared by clips and cleaned copies.
-fn encode_args(cmd: &mut Command, profile: VideoProfile) {
+fn encode_args(cmd: &mut Command, profile: VideoProfile, sound: bool) {
     let VideoProfile::Mp4 { crf } = profile;
-    cmd.args(["-c:v", "libx264", "-preset", "medium", "-crf", &crf.to_string(), "-pix_fmt", "yuv420p"])
-        .args(["-c:a", "aac", "-b:a", &format!("{}k", profile.audio_kbps())])
-        .args(["-movflags", "+faststart"]);
+    cmd.args(["-c:v", "libx264", "-preset", "medium", "-crf", &crf.to_string(), "-pix_fmt", "yuv420p"]);
+    if sound {
+        cmd.args(["-c:a", "aac", "-b:a", &format!("{}k", profile.audio_kbps())]);
+    }
+    cmd.args(["-movflags", "+faststart"]);
 }
 
 /// Cut `clip` out of `source` into its own MP4.
@@ -62,6 +70,7 @@ pub fn export_clip(
     progress: &mut dyn FnMut(f32),
 ) -> Result<(), String> {
     let (start, end) = (timeline.secs(clip.start), timeline.secs(clip.end));
+    let sound = has_sound(source);
     let mut cmd = crate::tools::command(ffmpeg);
     // Seeking before the input while re-encoding is exact: ffmpeg decodes from the keyframe
     // before and drops what comes ahead of `start`.
@@ -69,9 +78,13 @@ pub fn export_clip(
         .args(["-ss", &format!("{start:.6}"), "-i"])
         .arg(source)
         .args(["-t", &format!("{:.6}", end - start)])
-        .args(["-map", "0:v:0", "-map", "0:a:0", "-map_metadata", "-1", "-sn", "-dn"]);
-    encode_args(&mut cmd, profile);
-    if clip.gain_db.abs() > 0.005 {
+        .args(["-map", "0:v:0"]);
+    if sound {
+        cmd.args(["-map", "0:a:0"]);
+    }
+    cmd.args(["-map_metadata", "-1", "-sn", "-dn"]);
+    encode_args(&mut cmd, profile, sound);
+    if sound && clip.gain_db.abs() > 0.005 {
         cmd.args(["-af", &format!("volume={:.2}dB", clip.gain_db)]);
     }
     let tags = clip.tags;
@@ -94,32 +107,46 @@ pub fn write_ranges(
 ) -> Result<(), String> {
     let secs: Vec<(f64, f64)> = ranges.iter().map(|&(a, b)| (timeline.secs(a), timeline.secs(b))).collect();
     let total: f64 = secs.iter().map(|(a, b)| b - a).sum();
+    let sound = has_sound(source);
     let mut cmd = crate::tools::command(ffmpeg);
     cmd.args(["-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i"]).arg(source).args([
         "-filter_complex",
-        &concat_filter(&secs),
+        &concat_filter(&secs, sound),
         "-map",
         "[v]",
-        "-map",
-        "[a]",
-        "-map_metadata",
-        "-1",
     ]);
-    encode_args(&mut cmd, profile);
+    if sound {
+        cmd.args(["-map", "[a]"]);
+    }
+    cmd.args(["-map_metadata", "-1"]);
+    encode_args(&mut cmd, profile, sound);
     run(cmd, dst, total, &|| false, progress)
 }
 
-/// Each `[start, end)` of picture and sound, trimmed and joined.
-fn concat_filter(ranges: &[(f64, f64)]) -> String {
+/// Each `[start, end)` of picture (and sound, if there is any), trimmed and joined.
+fn concat_filter(ranges: &[(f64, f64)], sound: bool) -> String {
     let n = ranges.len();
     let labels = |p: &str| (0..n).map(|i| format!("[{p}{i}]")).collect::<String>();
-    let mut f = format!("[0:v:0]split={n}{};[0:a:0]asplit={n}{};", labels("sv"), labels("sa"));
+    let mut f = format!("[0:v:0]split={n}{};", labels("sv"));
+    if sound {
+        f += &format!("[0:a:0]asplit={n}{};", labels("sa"));
+    }
     for (i, (a, b)) in ranges.iter().enumerate() {
         f += &format!("[sv{i}]trim=start={a:.6}:end={b:.6},setpts=PTS-STARTPTS[v{i}];");
-        f += &format!("[sa{i}]atrim=start={a:.6}:end={b:.6},asetpts=PTS-STARTPTS[a{i}];");
+        if sound {
+            f += &format!("[sa{i}]atrim=start={a:.6}:end={b:.6},asetpts=PTS-STARTPTS[a{i}];");
+        }
     }
-    f += &(0..n).map(|i| format!("[v{i}][a{i}]")).collect::<String>();
-    f += &format!("concat=n={n}:v=1:a=1[v][a]");
+    match sound {
+        true => {
+            f += &(0..n).map(|i| format!("[v{i}][a{i}]")).collect::<String>();
+            f += &format!("concat=n={n}:v=1:a=1[v][a]");
+        }
+        false => {
+            f += &labels("v");
+            f += &format!("concat=n={n}:v=1:a=0[v]");
+        }
+    }
     f
 }
 
@@ -191,10 +218,53 @@ mod tests {
 
     #[test]
     fn concat_filter_joins_every_range() {
-        let f = concat_filter(&[(0.0, 1.5), (3.0, 4.25)]);
+        let f = concat_filter(&[(0.0, 1.5), (3.0, 4.25)], true);
         assert!(f.starts_with("[0:v:0]split=2[sv0][sv1];[0:a:0]asplit=2[sa0][sa1];"), "{f}");
         assert!(f.contains("[sv1]trim=start=3.000000:end=4.250000,setpts=PTS-STARTPTS[v1];"), "{f}");
         assert!(f.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"), "{f}");
+    }
+
+    #[test]
+    fn concat_filter_without_sound_joins_the_picture() {
+        let f = concat_filter(&[(0.0, 1.5), (3.0, 4.25)], false);
+        assert!(!f.contains("[0:a:0]") && !f.contains("atrim"), "{f}");
+        assert!(f.ends_with("[v0][v1]concat=n=2:v=1:a=0[v]"), "{f}");
+    }
+
+    /// A video without sound: clips and the cleaned copy are picture only, as long as asked.
+    #[test]
+    fn silent_video_clips_and_copy() {
+        let ffmpeg = crate::tools::dir().join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX));
+        if !ffmpeg.is_file() {
+            eprintln!("skipped: no ffmpeg in {}", crate::tools::dir().display());
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../audio/tests/fixtures/silent.mp4");
+        let scan = splitter_audio::scan::scan(&source, &mut |_| {}).unwrap();
+        assert!(scan.info.silent);
+        let rate = scan.info.sample_rate as u64;
+        let timeline = Timeline::of(&source, rate as u32);
+        let dir = std::env::temp_dir().join("splitter-silent-video-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let tags = Tags { title: "Clip".into(), album: "X".into(), track: 1, total: 1, replaygain: None };
+        let clip_path = dir.join("clip.mp4");
+        let clip = Clip { start: rate / 2, end: 2 * rate, path: &clip_path, tags: &tags, gain_db: 3.0 };
+        export_clip(&ffmpeg, &source, timeline, &clip, VideoProfile::default(), &|| false, &mut |_| {}).unwrap();
+        let copy = dir.join("copy.mp4");
+        write_ranges(
+            &ffmpeg,
+            &source,
+            timeline,
+            &[(0, rate), (2 * rate, 3 * rate)],
+            &copy,
+            VideoProfile::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        for (path, want) in [(&clip_path, 1.5), (&copy, 2.0)] {
+            let secs = splitter_audio::mp4::silent_video_secs(path).expect("picture only");
+            assert!((secs - want).abs() < 0.25, "{}: {secs} s", path.display());
+        }
     }
 
     /// Exports two clips from the fixture with the installed ffmpeg and checks that each one

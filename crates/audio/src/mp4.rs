@@ -9,16 +9,48 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// Seconds of priming at the start of the audio track that players skip, from its edit list.
-/// `None` if the file has no audio track or edit list saying so (then nothing is skipped).
-pub fn audio_delay_secs(path: &Path) -> Option<f64> {
+/// The length in seconds of a video with no sound track (picture only), from its movie
+/// header. `None` for anything else: a file with sound, or not an MP4.
+pub fn silent_video_secs(path: &Path) -> Option<f64> {
+    let moov = read_moov(path)?;
+    let handlers: Vec<&[u8]> = children(&moov)
+        .filter(|(t, _)| t == b"trak")
+        .filter_map(|(_, trak)| child(child(trak, b"mdia")?, b"hdlr")?.get(8..12))
+        .collect();
+    if !handlers.contains(&&b"vide"[..]) || handlers.contains(&&b"soun"[..]) {
+        return None;
+    }
+    // mvhd: version/flags (4), then times, timescale and duration (32 or 64 bits).
+    let mvhd = child(&moov, b"mvhd")?;
+    let (timescale, duration) = match mvhd.first()? {
+        0 => (
+            u32::from_be_bytes(mvhd.get(12..16)?.try_into().ok()?),
+            u32::from_be_bytes(mvhd.get(16..20)?.try_into().ok()?) as u64,
+        ),
+        _ => (
+            u32::from_be_bytes(mvhd.get(20..24)?.try_into().ok()?),
+            u64::from_be_bytes(mvhd.get(24..32)?.try_into().ok()?),
+        ),
+    };
+    (timescale > 0 && duration > 0).then(|| duration as f64 / timescale as f64)
+}
+
+/// The body of the file's moov box.
+fn read_moov(path: &Path) -> Option<Vec<u8>> {
     let mut f = File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let moov = find_box(&mut f, 0, len, b"moov")?;
     let mut buf = vec![0; usize::try_from(moov.1 - moov.0).ok()?];
     f.seek(SeekFrom::Start(moov.0)).ok()?;
     f.read_exact(&mut buf).ok()?;
-    let delay = children(&buf).filter(|(t, _)| t == b"trak").find_map(|(_, trak)| audio_delay_of_trak(trak));
+    Some(buf)
+}
+
+/// Seconds of priming at the start of the audio track that players skip, from its edit list.
+/// `None` if the file has no audio track or edit list saying so (then nothing is skipped).
+pub fn audio_delay_secs(path: &Path) -> Option<f64> {
+    let moov = read_moov(path)?;
+    let delay = children(&moov).filter(|(t, _)| t == b"trak").find_map(|(_, trak)| audio_delay_of_trak(trak));
     delay
 }
 
@@ -115,5 +147,19 @@ mod tests {
         let path = std::env::temp_dir().join("splitter-mp4-test.mp4");
         std::fs::write(&path, b"not an mp4 at all").unwrap();
         assert_eq!(audio_delay_secs(&path), None);
+        assert_eq!(silent_video_secs(&path), None);
+    }
+
+    #[test]
+    fn a_video_with_sound_is_not_silent() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video.mp4");
+        assert_eq!(silent_video_secs(&path), None);
+    }
+
+    #[test]
+    fn length_of_a_video_without_sound() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/silent.mp4");
+        let secs = silent_video_secs(&path).unwrap();
+        assert!((secs - 3.0).abs() < 0.05, "{secs}");
     }
 }

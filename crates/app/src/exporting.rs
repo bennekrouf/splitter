@@ -351,7 +351,9 @@ pub fn source_facts(path: &Path, scan: &Scan) -> SourceFacts {
         Bitrate::Cbr(k) | Bitrate::Avg(k) => (k, None),
         Bitrate::Vbr { avg, .. } => (avg, None),
         Bitrate::Pcm { bits, kbps } => (kbps, Some(bits)),
-        Bitrate::Unknown => ((info.file_size as f64 * 8.0 / 1000.0 / info.duration_secs().max(1.0)) as u32, None),
+        Bitrate::Unknown | Bitrate::None => {
+            ((info.file_size as f64 * 8.0 / 1000.0 / info.duration_secs().max(1.0)) as u32, None)
+        }
     };
     SourceFacts {
         lossy: bits.is_none(),

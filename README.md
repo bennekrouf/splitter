@@ -33,6 +33,11 @@ video, never both: a video shows its picture where a recording shows its overvie
 splits, silences and track names. Its sound is scanned, played and split like any recording's
 (silence detection, review keys, preview cuts, loudness).
 
+A video without a sound track (common on X) opens too: its timeline is silence as long as the
+picture, so nothing is detected and every split is placed by hand (**M**). Its clips and
+cleaned copy are picture only. **URL…** with **Video** falls back to the picture alone when
+the site offers no sound for it.
+
 The picture is played muted by the system's web view, from a small HTTP server on 127.0.0.1
 that serves only the selected file under a random token (if the web view won't load from there,
 e.g. WebView2 restricting local addresses, it switches to the app's own page protocol), and

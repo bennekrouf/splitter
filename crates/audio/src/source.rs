@@ -32,8 +32,53 @@ pub trait PcmSource: Send {
 pub fn open_source(path: &Path, mp3: Option<Arc<Mp3Index>>) -> Result<Box<dyn PcmSource>> {
     Ok(match mp3 {
         Some(index) => Box::new(Mp3Source::new(path, index)?),
-        None => Box::new(GenericSource::open(path)?),
+        None => match crate::mp4::silent_video_secs(path) {
+            Some(secs) => Box::new(Silence::new(Silence::frames(secs))),
+            None => Box::new(GenericSource::open(path)?),
+        },
     })
+}
+
+/// The timeline of a video without sound: silence as long as the picture, so it plays, seeks
+/// and splits like any other.
+pub struct Silence {
+    total: u64,
+    pos: u64,
+}
+
+impl Silence {
+    pub const RATE: u32 = 48_000;
+
+    pub fn new(total: u64) -> Self {
+        Self { total, pos: 0 }
+    }
+
+    /// Sample frames in `secs`.
+    pub fn frames(secs: f64) -> u64 {
+        (secs * Self::RATE as f64).round() as u64
+    }
+}
+
+impl PcmSource for Silence {
+    fn channels(&self) -> usize {
+        1
+    }
+
+    fn sample_rate(&self) -> u32 {
+        Self::RATE
+    }
+
+    fn seek(&mut self, frame: u64) -> Result<()> {
+        self.pos = frame.min(self.total);
+        Ok(())
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
+        let n = 4096.min(self.total - self.pos);
+        out.extend(std::iter::repeat_n(0.0, n as usize));
+        self.pos += n;
+        Ok(n > 0)
+    }
 }
 
 /// A demuxer + decoder pair that yields interleaved f32, skipping a leading number of frames.
