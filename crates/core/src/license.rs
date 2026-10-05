@@ -96,11 +96,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     fn sign(json: &str, key: &SigningKey) -> String {
-        format!(
-            "{}.{}",
-            URL_SAFE_NO_PAD.encode(json),
-            URL_SAFE_NO_PAD.encode(key.sign(json.as_bytes()).to_bytes())
-        )
+        format!("{}.{}", URL_SAFE_NO_PAD.encode(json), URL_SAFE_NO_PAD.encode(key.sign(json.as_bytes()).to_bytes()))
     }
 
     const PAYLOAD: &str = r#"{"v":1,"id":"lic_1","product":"splitter","edition":"pro","email":"anna@band.ch","issued":"2026-09-27","updates_until":"2027-09-27"}"#;
