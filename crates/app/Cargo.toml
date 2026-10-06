@@ -8,7 +8,9 @@ description = "Split long MP3/WAV recordings into tracks"
 splitter-core.workspace = true
 splitter-audio.workspace = true
 dioxus.workspace = true
-tokio.workspace = true
+# rt and sync are used by the usage statistics (spawn_blocking, an async mutex).
+# Dioxus enables both today; named here so this crate does not depend on that.
+tokio = { workspace = true, features = ["rt", "sync"] }
 rfd.workspace = true
 crossbeam-channel.workspace = true
 dirs.workspace = true
@@ -24,9 +26,14 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 # Deleting a recording from the file list moves it to the system Trash, so it can be restored.
 trash = "5.2"
 base64.workspace = true
+# The anonymous install id for usage statistics: 128 random bits. Already
+# in the tree via other crates, so this names a dependency rather than adding one.
+getrandom = "0.3"
 
 [dev-dependencies]
 symphonia.workspace = true
+# The usage-statistics tests run a throwaway local HTTP server.
+tokio = { workspace = true, features = ["net", "io-util", "macros", "rt-multi-thread"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

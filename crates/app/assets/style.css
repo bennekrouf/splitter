@@ -568,6 +568,27 @@ select.profile {
   cursor: pointer;
 }
 .update-banner-dismiss:hover { opacity: 1; }
+button.update-banner-link {
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+/* Usage-statistics notice. Bottom, not top: the update banner claims the top
+   edge. Same colours as the update banner. */
+.consent-banner {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #0b1a26;
+  font-size: 13px;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.35);
+}
 
 /* Licence */
 button.brand {
