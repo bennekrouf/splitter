@@ -57,7 +57,26 @@ pub fn App() -> Element {
     use_future(move || async move {
         tokio::time::sleep(Duration::from_secs(3)).await;
         if let Some(info) = crate::update_check::check().await {
+            crate::telemetry::record(crate::telemetry::Event::UpdateOffered { to: info.latest_version.clone() });
             update.set(Some(info));
+        }
+    });
+
+    // Anonymous usage statistics. On by default, but only once the person has
+    // been told: `start` reads the opt-outs (including a shell profile's),
+    // records the launch, and says whether the notice is still owed.
+    let mut ask_consent = use_signal(|| false);
+    use_future(move || async move {
+        if crate::telemetry::start().await {
+            ask_consent.set(true);
+        }
+        crate::telemetry::flush_forever().await;
+    });
+    // Recorded while the notice is on screen, so collection starts from the
+    // next event — never from one the person had no chance to read about.
+    use_effect(move || {
+        if ask_consent() {
+            crate::telemetry::mark_informed();
         }
     });
 
@@ -268,8 +287,44 @@ pub fn App() -> Element {
                     strong { "{info.latest_version}" }
                     " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
                 }
-                a { class: "update-banner-link", href: "{info.download_url}", target: "_blank", "Download" }
+                a {
+                    class: "update-banner-link",
+                    href: "{info.download_url}",
+                    target: "_blank",
+                    onclick: {
+                        let to = info.latest_version.clone();
+                        move |_| crate::telemetry::record(crate::telemetry::Event::UpdateClicked { to: to.clone() })
+                    },
+                    "Download"
+                }
                 button { class: "update-banner-dismiss", title: "Dismiss", onclick: move |_| update.set(None), "×" }
+            }
+        }
+        // Usage-statistics notice: once, at the bottom so it never sits under the
+        // update banner. Either button is remembered.
+        if ask_consent() {
+            div { class: "consent-banner",
+                span { class: "update-banner-text",
+                    strong { "Splitter shares anonymous usage statistics. " }
+                    "Whether it is installed and opened, and its version and operating system \
+                     — never your recordings, files or anything you type."
+                }
+                button {
+                    class: "update-banner-link",
+                    onclick: move |_| {
+                        crate::telemetry::set_consent(true);
+                        ask_consent.set(false);
+                    },
+                    "OK"
+                }
+                button {
+                    class: "update-banner-link",
+                    onclick: move |_| {
+                        crate::telemetry::set_consent(false);
+                        ask_consent.set(false);
+                    },
+                    "Turn off"
+                }
             }
         }
     }

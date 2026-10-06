@@ -163,6 +163,9 @@ jobs:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
           SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          # Where anonymous usage statistics go (repository variable, not a
+          # secret). Unset, the build sends nothing and never asks.
+          MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
         run: cargo build --release --target aarch64-apple-darwin
 
       # ── Sign the binary with hardened runtime + webview entitlements ───────
@@ -321,6 +324,9 @@ jobs:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
           SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          # Where anonymous usage statistics go (repository variable, not a
+          # secret). Unset, the build sends nothing and never asks.
+          MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
         run: cargo build --release
 
       - name: Copy WebView2Loader.dll
@@ -474,6 +480,9 @@ jobs:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
           SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          # Where anonymous usage statistics go (repository variable, not a
+          # secret). Unset, the build sends nothing and never asks.
+          MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
         run: cargo build --release --target x86_64-unknown-linux-gnu
 
       - name: Package tar.gz

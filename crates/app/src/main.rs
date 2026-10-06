@@ -9,6 +9,7 @@ mod licence;
 mod media_server;
 mod review;
 mod state;
+mod telemetry;
 mod tools;
 mod update_check;
 mod video;
