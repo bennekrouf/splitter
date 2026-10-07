@@ -15,6 +15,15 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- Splitter now uses the PolyForm Noncommercial License 1.0.0 and has updated
+  branding. This means the software is free for personal use, but commercial use
+  requires a license. The company name has changed to Mayorana, and the
+  copyright notice has been updated accordingly.
+
 ## [0.1.18] - 2026-10-06
 
 ### Added
