@@ -38,8 +38,8 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set("FileDescription", "Splitter");
         res.set("ProductName", "Splitter");
-        res.set("CompanyName", "Bennekrouf");
-        res.set("LegalCopyright", "© Bennekrouf");
+        res.set("CompanyName", "Mayorana");
+        res.set("LegalCopyright", "© 2026 Mayorana");
         if let Err(e) = res.compile() {
             // rc.exe / windres isn't on every Windows runner; warn and ship icon-less rather
             // than failing the build.

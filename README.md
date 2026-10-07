@@ -290,3 +290,22 @@ for Windows, and `DIST_SSH_*` for the upload. Without the macOS secrets the rele
 - **Playback**: an audio thread owns the cpal stream and decodes ahead into a lock-free ring. The
   playhead is published via atomics and polled by the UI at 60 fps. Only the playhead components
   re-render per frame; the waveform SVG re-renders only when the view changes.
+
+---
+
+## Licence
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- **Free** for personal use, learning, research and hobby projects, and for
+  charities, schools, universities and government institutions.
+- **Commercial use requires a licence** — including a solo consultant using it
+  on client work, and an employee using it at their job. That licence is
+  [Splitter Pro](https://mayorana.ch/en/apps/splitter), bought on Splitter's
+  page; see [Pro licence](#pro-licence) for how the key works.
+
+This is deliberately not an OSI-approved open source licence: the source is
+public and readable, but companies using it for work buy Splitter Pro.
+
+The name, logo and icons are trademarks and are not covered by that licence —
+fork it and rebrand it. See [TRADEMARK.md](TRADEMARK.md).

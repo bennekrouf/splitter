@@ -7,7 +7,7 @@
 #endif
 
 #define MyAppName      "Splitter"
-#define MyAppPublisher "Bennekrouf"
+#define MyAppPublisher "Mayorana"
 #define MyAppURL       "https://github.com/bennekrouf/splitter"
 #define MyAppExeName   "splitter.exe"
 
@@ -47,6 +47,8 @@ CloseApplications=yes
 SetupIconFile=..\crates\app\assets\icon.ico
 UninstallDisplayIcon={app}\icon.ico
 #endif
+; Shows the licence (PolyForm Noncommercial) as a page the user accepts before installing.
+LicenseFile=..\LICENSE
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

@@ -3,6 +3,7 @@ name = "splitter"
 version.workspace = true
 edition.workspace = true
 description = "Split long MP3/WAV recordings into tracks"
+license-file.workspace = true
 
 [dependencies]
 splitter-core.workspace = true
