@@ -4,7 +4,7 @@ members = ["crates/core", "crates/audio", "crates/app"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 # Source-available under PolyForm Noncommercial 1.0.0: free for personal use,
 # commercial use needs a licence. See LICENSE and TRADEMARK.md.
