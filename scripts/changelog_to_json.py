@@ -5,7 +5,7 @@ CHANGELOG.md is the only place a release note is written. This script is what
 lets that single copy reach the three places it has to appear:
 
   * `releases.json`, published next to the builds on mayorana.ch and rendered
-    at /en/apps/splitter/releases — the public, indexable page.
+    at /en/apps/trackcut/releases — the public, indexable page.
   * the GitHub Release body, so the tag says what shipped rather than only how
     to download it.
   * anything in-app that wants "what's new in the version you are being offered".
@@ -31,9 +31,9 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-NAME = "splitter"
-PRODUCT = "Splitter"
-PAGE = "https://mayorana.ch/en/apps/splitter"
+NAME = "trackcut"
+PRODUCT = "TrackCut"
+PAGE = "https://mayorana.ch/en/apps/trackcut"
 
 # "## [0.5.49] - 2026-09-05" or "## [Unreleased]"
 HEADING = re.compile(r"^##\s+\[(?P<version>[^\]]+)\]\s*(?:-\s*(?P<date>\S+))?\s*$")

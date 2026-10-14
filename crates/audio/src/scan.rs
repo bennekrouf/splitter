@@ -180,7 +180,7 @@ impl CacheKey {
 fn cache_file(path: &Path, ext: &str) -> Option<PathBuf> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
-    Some(dirs::cache_dir()?.join("splitter").join(format!("{:016x}.{ext}", h.finish())))
+    Some(dirs::cache_dir()?.join("trackcut").join(format!("{:016x}.{ext}", h.finish())))
 }
 
 /// A cached `T` for `path`, if one exists for this exact version of the file.
@@ -226,7 +226,7 @@ pub fn load_or_scan(path: &Path, progress: &mut dyn FnMut(f32)) -> Result<Scan> 
     }
     let scan = scan(path, progress)?;
     if let Err(e) = write_cached(path, "idx", SCAN_MAGIC, &key, &scan) {
-        eprintln!("splitter: could not cache scan for {}: {e:#}", path.display());
+        eprintln!("trackcut: could not cache scan for {}: {e:#}", path.display());
     }
     Ok(scan)
 }

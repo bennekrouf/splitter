@@ -1,15 +1,15 @@
-; Splitter — Windows Installer
+; TrackCut — Windows Installer
 ; Build: iscc /DMyAppVersion=X.Y.Z installer\installer.iss
-; Output: dist\splitter-setup.exe
+; Output: dist\trackcut-setup.exe
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
 #endif
 
-#define MyAppName      "Splitter"
+#define MyAppName      "TrackCut"
 #define MyAppPublisher "Mayorana"
-#define MyAppURL       "https://github.com/bennekrouf/splitter"
-#define MyAppExeName   "splitter.exe"
+#define MyAppURL       "https://github.com/bennekrouf/trackcut"
+#define MyAppExeName   "trackcut.exe"
 
 [Setup]
 AppId={{82950AB2-0644-4D0B-9533-C311E3BEB643}
@@ -19,14 +19,14 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases/latest
-; Per-user install — Splitter needs no elevation and should never require an
-; admin prompt to run. Its webview data lives in %LOCALAPPDATA%\Splitter\
+; Per-user install — TrackCut needs no elevation and should never require an
+; admin prompt to run. Its webview data lives in %LOCALAPPDATA%\TrackCut\
 ; (created at launch); cutlists are saved next to the recordings.
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist
-OutputBaseFilename=splitter-setup
+OutputBaseFilename=trackcut-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -59,7 +59,7 @@ Name: "desktopicon"; \
   GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "..\target\release\splitter.exe";        DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\trackcut.exe";        DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\WebView2Loader.dll";  DestDir: "{app}"; Flags: ignoreversion
 ; Ship the .ico alongside the .exe so shortcuts can point at it explicitly —
 ; otherwise some Windows builds fail to extract the embedded icon for shortcut

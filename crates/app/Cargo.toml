@@ -1,13 +1,13 @@
 [package]
-name = "splitter"
+name = "trackcut"
 version.workspace = true
 edition.workspace = true
 description = "Split long MP3/WAV recordings into tracks"
 license-file.workspace = true
 
 [dependencies]
-splitter-core.workspace = true
-splitter-audio.workspace = true
+trackcut-core.workspace = true
+trackcut-audio.workspace = true
 dioxus.workspace = true
 # rt and sync are used by the usage statistics (spawn_blocking, an async mutex).
 # Dioxus enables both today; named here so this crate does not depend on that.

@@ -3,10 +3,10 @@
 
 use crate::state::App;
 use dioxus::prelude::*;
-use splitter_audio::source::open_source;
-use splitter_audio::transcode::preview;
-use splitter_audio::{AltPcm, Bitrate};
-use splitter_core::export::Profile;
+use trackcut_audio::source::open_source;
+use trackcut_audio::transcode::preview;
+use trackcut_audio::{AltPcm, Bitrate};
+use trackcut_core::export::Profile;
 use std::sync::Arc;
 
 /// Length of the compared window.
@@ -46,7 +46,7 @@ impl App {
             AbState::Preparing { .. } => return,
             _ => {}
         }
-        if self.selected_path().is_some_and(|p| splitter_core::is_video(&p)) {
+        if self.selected_path().is_some_and(|p| trackcut_core::is_video(&p)) {
             self.error.set(Some("A/B compares audio formats; a video is exported as MP4 clips.".into()));
             return;
         }
@@ -72,7 +72,7 @@ impl App {
         };
         let (tx, rx) = crossbeam_channel::bounded::<AbResult>(1);
         std::thread::Builder::new()
-            .name("splitter-ab".into())
+            .name("trackcut-ab".into())
             .spawn(move || {
                 let result = open_source(&path, scan.mp3.clone().map(Arc::new))
                     .and_then(|mut src| preview(profile, src.as_mut(), start, end, bits))

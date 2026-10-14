@@ -5,11 +5,11 @@ mod common;
 
 use common::*;
 use mp3lame_encoder::Bitrate;
-use splitter_audio::export::{export, ExportJob, Tags};
-use splitter_audio::scan::scan;
-use splitter_audio::source::open_source;
-use splitter_audio::transcode::preview;
-use splitter_core::export::Profile;
+use trackcut_audio::export::{export, ExportJob, Tags};
+use trackcut_audio::scan::scan;
+use trackcut_audio::source::open_source;
+use trackcut_audio::transcode::preview;
+use trackcut_core::export::Profile;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -130,7 +130,7 @@ fn previews_line_up_with_the_source() {
 /// Apply cuts: the kept ranges come out back to back, sample for sample, from WAV and MP3.
 #[test]
 fn kept_ranges_are_written_back_to_back() {
-    use splitter_audio::transcode::write_ranges_to_wav;
+    use trackcut_audio::transcode::write_ranges_to_wav;
     let wav = tmp("cleaned-src.wav");
     write_wav(&wav);
     let mp3 = tmp("cleaned-src.mp3");
@@ -155,7 +155,7 @@ fn kept_ranges_are_written_back_to_back() {
 fn video_audio_exports_by_reencoding() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video.mp4");
     let s = scan(&src, &mut |_| {}).unwrap();
-    assert!(!splitter_audio::export::can_copy(&src, &s));
+    assert!(!trackcut_audio::export::can_copy(&src, &s));
     let job = |path: PathBuf| ExportJob {
         start: A,
         end: B,

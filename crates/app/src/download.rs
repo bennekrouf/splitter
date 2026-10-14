@@ -21,12 +21,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Markers we ask yt-dlp to print, so its other output can't be mistaken for ours.
-const PROGRESS: &str = "SPLITTER-PROGRESS";
-const FILE: &str = "SPLITTER-FILE";
+const PROGRESS: &str = "TRACKCUT-PROGRESS";
+const FILE: &str = "TRACKCUT-FILE";
 
-/// Where downloads go: ~/Music/Splitter/Downloads.
+/// Where downloads go: ~/Music/TrackCut/Downloads.
 pub fn downloads_dir() -> PathBuf {
-    dirs::audio_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).join("Splitter").join("Downloads")
+    dirs::audio_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).join("TrackCut").join("Downloads")
 }
 
 /// What to download from a URL.
@@ -101,7 +101,7 @@ impl Download {
         let (c, k) = (child.clone(), cancelled.clone());
         let (url, dir, tools_dir) = (url.to_owned(), dir.to_owned(), tools_dir.to_owned());
         std::thread::Builder::new()
-            .name("splitter-download".into())
+            .name("trackcut-download".into())
             .spawn(move || {
                 let result = run(&url, kind, &dir, &tools_dir, &c, &k, &tx);
                 if !k.load(Ordering::SeqCst) {
@@ -200,7 +200,7 @@ fn run(
         (_, Some(s)) => return Err(format!("yt-dlp stopped ({s}) without producing a file")),
         (_, None) => return Err("yt-dlp stopped without producing a file".into()),
     };
-    if kind == Kind::Video && splitter_audio::mp4::silent_video_secs(&file).is_some() {
+    if kind == Kind::Video && trackcut_audio::mp4::silent_video_secs(&file).is_some() {
         log("This video has no sound: split it by hand with M.".into());
     }
     if kind == Kind::Video || !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a")) {
@@ -209,7 +209,7 @@ fn run(
     phase(Phase::Converting(None));
     log("Converting the AAC audio to WAV…".into());
     let wav = file.with_extension("wav");
-    splitter_audio::transcode::decode_to_wav(&file, &wav, &mut |p| phase(Phase::Converting(Some(p))))
+    trackcut_audio::transcode::decode_to_wav(&file, &wav, &mut |p| phase(Phase::Converting(Some(p))))
         .map_err(|e| format!("Could not convert the download to WAV: {e:#}"))?;
     let _ = std::fs::remove_file(&file);
     Ok(wav)
@@ -384,20 +384,20 @@ mod tests {
             Some(Phase::Downloading(p)) => p,
             _ => panic!("not a download line: {line}"),
         };
-        assert!((frac("SPLITTER-PROGRESS downloading 250 1000 NA").unwrap() - 0.25).abs() < 1e-6);
+        assert!((frac("TRACKCUT-PROGRESS downloading 250 1000 NA").unwrap() - 0.25).abs() < 1e-6);
         // Only an estimate of the size.
-        assert!((frac("SPLITTER-PROGRESS downloading 500 NA 1000.5").unwrap() - 0.5).abs() < 1e-3);
-        assert_eq!(frac("SPLITTER-PROGRESS downloading 500 NA NA"), None);
-        assert!(matches!(parse_progress("SPLITTER-PROGRESS finished 1000 1000 NA"), Some(Phase::Converting(None))));
+        assert!((frac("TRACKCUT-PROGRESS downloading 500 NA 1000.5").unwrap() - 0.5).abs() < 1e-3);
+        assert_eq!(frac("TRACKCUT-PROGRESS downloading 500 NA NA"), None);
+        assert!(matches!(parse_progress("TRACKCUT-PROGRESS finished 1000 1000 NA"), Some(Phase::Converting(None))));
         assert!(parse_progress("[youtube] abc: Downloading webpage").is_none());
     }
 
     /// Needs the network; installs the tools into the app's real tools folder on first run.
-    /// `cargo test -p splitter -- --ignored download`
+    /// `cargo test -p trackcut -- --ignored download`
     #[test]
     #[ignore]
     fn downloads_a_short_video() {
-        let dir = std::env::temp_dir().join("splitter-download-test");
+        let dir = std::env::temp_dir().join("trackcut-download-test");
         let _ = std::fs::remove_dir_all(&dir);
         let d =
             Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", Kind::Audio, &dir, &tools::dir()).unwrap();
@@ -422,11 +422,11 @@ mod tests {
     }
 
     /// Needs the network, like the audio one.
-    /// `cargo test -p splitter -- --ignored download`
+    /// `cargo test -p trackcut -- --ignored download`
     #[test]
     #[ignore]
     fn downloads_a_short_video_as_one_mp4() {
-        let dir = std::env::temp_dir().join("splitter-download-video-test");
+        let dir = std::env::temp_dir().join("trackcut-download-video-test");
         let _ = std::fs::remove_dir_all(&dir);
         let d =
             Download::start("https://www.youtube.com/watch?v=jNQXAC9IVRw", Kind::Video, &dir, &tools::dir()).unwrap();
@@ -436,7 +436,7 @@ mod tests {
                 Event::Done(path) => {
                     // One file with picture and sound, whose sound opens like any recording's.
                     assert_eq!(path.extension().unwrap(), "mp4");
-                    let scan = splitter_audio::scan::scan(&path, &mut |_| {}).unwrap();
+                    let scan = trackcut_audio::scan::scan(&path, &mut |_| {}).unwrap();
                     assert_eq!(scan.info.codec, "AAC");
                     assert!((18.0..20.0).contains(&scan.info.duration_secs()), "{}", scan.info.duration_secs());
                     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "leftover parts");

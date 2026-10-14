@@ -4,9 +4,9 @@ mod common;
 
 use common::*;
 use ebur128::{EbuR128, Mode};
-use splitter_audio::loudness::analyze;
-use splitter_audio::scan::scan;
-use splitter_audio::source::open_source;
+use trackcut_audio::loudness::analyze;
+use trackcut_audio::scan::scan;
+use trackcut_audio::source::open_source;
 use std::sync::Arc;
 
 #[test]
@@ -37,9 +37,9 @@ fn range_loudness_matches_direct_measurement() {
 
 #[test]
 fn normalized_export_hits_the_target_and_is_tagged() {
-    use splitter_audio::export::{export, ExportJob, Tags};
-    use splitter_audio::loudness::apply_to_jobs;
-    use splitter_core::export::{Normalize, Profile};
+    use trackcut_audio::export::{export, ExportJob, Tags};
+    use trackcut_audio::loudness::apply_to_jobs;
+    use trackcut_core::export::{Normalize, Profile};
 
     let path = tmp("loudness-norm-src.wav");
     write_wav(&path);
@@ -76,9 +76,9 @@ fn normalized_export_hits_the_target_and_is_tagged() {
 
 #[test]
 fn normalization_never_exceeds_the_peak_ceiling() {
-    use splitter_audio::export::{ExportJob, Tags};
-    use splitter_audio::loudness::apply_to_jobs;
-    use splitter_core::export::Normalize;
+    use trackcut_audio::export::{ExportJob, Tags};
+    use trackcut_audio::loudness::apply_to_jobs;
+    use trackcut_core::export::Normalize;
 
     let path = tmp("loudness-ceiling-src.wav");
     write_wav(&path);

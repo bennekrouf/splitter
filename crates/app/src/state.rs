@@ -2,11 +2,11 @@
 
 use crate::exporting::{export_dir_of, ExportStatus, Exporter};
 use dioxus::prelude::*;
-use splitter_audio::loudness::LoudnessMap;
-use splitter_audio::{Player, Scan, ScanEvent, Scanner};
-use splitter_core::cutlist::Cutlist;
-use splitter_core::edit::{History, Snapshot};
-use splitter_core::{list_recordings, Recording, Status};
+use trackcut_audio::loudness::LoudnessMap;
+use trackcut_audio::{Player, Scan, ScanEvent, Scanner};
+use trackcut_core::cutlist::Cutlist;
+use trackcut_core::edit::{History, Snapshot};
+use trackcut_core::{list_recordings, Recording, Status};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -47,7 +47,7 @@ pub struct App {
     pub root: Signal<Option<Rc<MountedData>>>,
     pub player: Signal<Player>,
     pub scanner: Signal<Scanner>,
-    /// Edits for every recording in the folder; saved as `splitter.cutlist.json`.
+    /// Edits for every recording in the folder; saved as `trackcut.cutlist.json`.
     pub cutlist: Signal<Cutlist>,
     /// Unsaved changes since this instant (debounced saves during drags).
     pub cut_dirty: Signal<Option<Instant>>,
@@ -86,7 +86,7 @@ pub struct App {
     pub ab_rx: Signal<Option<crossbeam_channel::Receiver<crate::ab::AbResult>>>,
     /// Text of the "Open URL" dialog while it's open.
     pub url_dialog: Signal<Option<String>>,
-    /// The Splitter Pro licence on this computer.
+    /// The TrackCut Pro licence on this computer.
     pub licence: Signal<crate::licence::Status>,
     /// Key being typed in the licence dialog while it's open.
     pub licence_dialog: Signal<Option<String>>,
@@ -255,7 +255,7 @@ impl App {
     pub fn rename_recording(mut self, stem: &str) -> bool {
         let Some(i) = *self.selected.peek() else { return false };
         let Some(from) = self.selected_path() else { return false };
-        let Some(to) = splitter_core::renamed(&from, stem) else { return true };
+        let Some(to) = trackcut_core::renamed(&from, stem) else { return true };
         let (old_key, new_key) = (key_of(&from), key_of(&to));
         let fail = |mut app: Self, msg: String| {
             app.error.set(Some(msg));

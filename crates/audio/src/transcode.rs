@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use mp3lame_encoder::{Bitrate, Builder, FlushGap, InterleavedPcm, MonoPcm, Quality, VbrMode};
-use splitter_core::export::Profile;
+use trackcut_core::export::Profile;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::num::NonZeroU32;
@@ -330,7 +330,7 @@ fn vorbis_comment(tags: &Tags) -> Vec<u8> {
     for (key, value) in tags.replaygain.iter().flat_map(|rg| rg.fields()) {
         fields.push(format!("{key}={value}"));
     }
-    let vendor = b"splitter";
+    let vendor = b"trackcut";
     let mut out = Vec::new();
     out.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
     out.extend_from_slice(vendor);

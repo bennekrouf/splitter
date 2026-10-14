@@ -5,10 +5,10 @@
 //! menu and Explorer. If absent, the build still succeeds, icon-less, with a
 //! `cargo:warning` so the gap is visible in the build log.
 //!
-//! `SPLITTER_RELEASE_DATE` (`YYYY-MM-DD`) is what a Pro licence's `updates_until` is
+//! `TRACKCUT_RELEASE_DATE` (`YYYY-MM-DD`) is what a Pro licence's `updates_until` is
 //! compared with: taken from the environment if set, else the date of the commit being
 //! built (the release commit, in CI), else left empty (unknown: every licence covers it).
-//! `SPLITTER_LICENSE_PUBLIC_KEY` is read by the app itself with `option_env!`; it is
+//! `TRACKCUT_LICENSE_PUBLIC_KEY` is read by the app itself with `option_env!`; it is
 //! listed here so changing it rebuilds.
 //!
 //! The Windows part is a no-op on other targets.
@@ -16,12 +16,12 @@
 fn main() {
     println!("cargo:rerun-if-changed=assets/icon.ico");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=SPLITTER_RELEASE_DATE");
-    println!("cargo:rerun-if-env-changed=SPLITTER_LICENSE_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=TRACKCUT_RELEASE_DATE");
+    println!("cargo:rerun-if-env-changed=TRACKCUT_LICENSE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
 
-    let date = std::env::var("SPLITTER_RELEASE_DATE").ok().filter(|d| !d.is_empty()).or_else(commit_date);
-    println!("cargo:rustc-env=SPLITTER_RELEASE_DATE={}", date.unwrap_or_default());
+    let date = std::env::var("TRACKCUT_RELEASE_DATE").ok().filter(|d| !d.is_empty()).or_else(commit_date);
+    println!("cargo:rustc-env=TRACKCUT_RELEASE_DATE={}", date.unwrap_or_default());
 
     #[cfg(target_os = "windows")]
     {
@@ -36,8 +36,8 @@ fn main() {
 
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
-        res.set("FileDescription", "Splitter");
-        res.set("ProductName", "Splitter");
+        res.set("FileDescription", "TrackCut");
+        res.set("ProductName", "TrackCut");
         res.set("CompanyName", "Mayorana");
         res.set("LegalCopyright", "© 2026 Mayorana");
         if let Err(e) = res.compile() {

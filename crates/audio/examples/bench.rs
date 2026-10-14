@@ -1,9 +1,9 @@
 //! Time the scan and random seeks on a real file.
 //!
-//!     cargo run -p splitter-audio --release --example bench -- path/to/recording.mp3
+//!     cargo run -p trackcut-audio --release --example bench -- path/to/recording.mp3
 
-use splitter_audio::scan::scan;
-use splitter_audio::source::open_source;
+use trackcut_audio::scan::scan;
+use trackcut_audio::source::open_source;
 use std::sync::Arc;
 use std::time::Instant;
 

@@ -22,13 +22,13 @@ pub struct Applying {
     pub progress: f32,
     from: PathBuf,
     to: PathBuf,
-    edit: splitter_core::edit::RecordingEdit,
+    edit: trackcut_core::edit::RecordingEdit,
 }
 
 /// `name (cleaned).wav` (`.mp4` for a video) next to the original, or `(cleaned 2)`, … if taken.
 fn cleaned_path(path: &Path) -> PathBuf {
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let ext = if splitter_core::is_video(path) { "mp4" } else { "wav" };
+    let ext = if trackcut_core::is_video(path) { "mp4" } else { "wav" };
     (1..)
         .map(|n| match n {
             1 => path.with_file_name(format!("{stem} (cleaned).{ext}")),
@@ -62,7 +62,7 @@ impl App {
             return;
         }
         let to = cleaned_path(&from);
-        let video = splitter_core::is_video(&from).then(|| self.cutlist.peek().export.video);
+        let video = trackcut_core::is_video(&from).then(|| self.cutlist.peek().export.video);
         let (tx, events) = crossbeam_channel::unbounded();
         let (src, dst) = (from.clone(), to.clone());
         std::thread::spawn(move || {
@@ -79,7 +79,7 @@ impl App {
                     write_ranges(&ffmpeg, &src, Timeline::of(&src, rate), &ranges, &dst, profile, &mut progress)
                         .map(|()| Timeline::of(&dst, rate).frame(0.0))
                 }),
-                None => splitter_audio::transcode::write_ranges_to_wav(&src, &scan, &ranges, &dst, &mut progress)
+                None => trackcut_audio::transcode::write_ranges_to_wav(&src, &scan, &ranges, &dst, &mut progress)
                     .map(|()| 0)
                     .map_err(|e| format!("{e:#}")),
             };

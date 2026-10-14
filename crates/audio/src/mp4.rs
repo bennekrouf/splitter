@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn nothing_for_files_without_one() {
-        let path = std::env::temp_dir().join("splitter-mp4-test.mp4");
+        let path = std::env::temp_dir().join("trackcut-mp4-test.mp4");
         std::fs::write(&path, b"not an mp4 at all").unwrap();
         assert_eq!(audio_delay_secs(&path), None);
         assert_eq!(silent_video_secs(&path), None);

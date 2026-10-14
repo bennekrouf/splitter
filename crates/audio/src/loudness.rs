@@ -1,18 +1,18 @@
 //! One pass of EBU R128 measurement per recording (400 ms block loudness every 100 ms, and
 //! true peak), cached like the scan. Track, album and normalization numbers are then derived
-//! instantly by `splitter_core::loudness`.
+//! instantly by `trackcut_core::loudness`.
 
 use crate::export::{ExportJob, ReplayGain};
 use crate::scan::{read_cached, write_cached, CacheKey, Scan};
 use crate::source::open_source;
 use anyhow::{anyhow, Result};
 use ebur128::{EbuR128, Mode};
-use splitter_core::export::Normalize;
-use splitter_core::loudness::{normalize_gain, REPLAYGAIN_REFERENCE};
+use trackcut_core::export::Normalize;
+use trackcut_core::loudness::{normalize_gain, REPLAYGAIN_REFERENCE};
 use std::path::Path;
 use std::sync::Arc;
 
-pub use splitter_core::loudness::LoudnessMap;
+pub use trackcut_core::loudness::LoudnessMap;
 
 const MAGIC: &[u8; 8] = b"SPLTLUD1";
 
@@ -74,7 +74,7 @@ pub fn load_or_analyze(path: &Path, scan: &Scan, progress: &mut dyn FnMut(f32)) 
     }
     let map = analyze(path, scan, progress)?;
     if let Err(e) = write_cached(path, "loud", MAGIC, &key, &map) {
-        eprintln!("splitter: could not cache loudness for {}: {e:#}", path.display());
+        eprintln!("trackcut: could not cache loudness for {}: {e:#}", path.display());
     }
     Ok(map)
 }

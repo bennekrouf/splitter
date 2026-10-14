@@ -1,21 +1,21 @@
-//! The Splitter Pro licence on this computer: the pasted key, kept in the config folder,
+//! The TrackCut Pro licence on this computer: the pasted key, kept in the config folder,
 //! and what it unlocks for this build. The check itself is offline, in
-//! `splitter_core::license`.
+//! `trackcut_core::license`.
 
 use base64::Engine;
-use splitter_core::license::{self, License, LicenseError};
+use trackcut_core::license::{self, License, LicenseError};
 use std::path::PathBuf;
 
-/// Where "Buy Splitter Pro" leads.
-pub const BUY_URL: &str = "https://mayorana.ch/en/apps/splitter";
+/// Where "Buy TrackCut Pro" leads.
+pub const BUY_URL: &str = "https://mayorana.ch/en/apps/trackcut";
 
 /// The public half of mayorana.ch's licence signing key (32 bytes, standard base64),
-/// built in by the release workflow from the `SPLITTER_LICENSE_PUBLIC_KEY` variable.
-const PUBLIC_KEY: Option<&str> = option_env!("SPLITTER_LICENSE_PUBLIC_KEY");
+/// built in by the release workflow from the `TRACKCUT_LICENSE_PUBLIC_KEY` variable.
+const PUBLIC_KEY: Option<&str> = option_env!("TRACKCUT_LICENSE_PUBLIC_KEY");
 
 /// This build's release date (`YYYY-MM-DD`), set by build.rs. Empty when unknown, which
 /// every licence covers.
-const RELEASE_DATE: &str = env!("SPLITTER_RELEASE_DATE");
+const RELEASE_DATE: &str = env!("TRACKCUT_RELEASE_DATE");
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -67,9 +67,9 @@ pub fn current() -> Status {
     }
 }
 
-/// Checks `key` and, if it is a Splitter licence, saves it for the next starts.
+/// Checks `key` and, if it is a TrackCut licence, saves it for the next starts.
 pub fn activate(key: &str) -> Result<Status, String> {
-    let public = public_key().ok_or("This build of Splitter can't check licences. Download it from mayorana.ch.")?;
+    let public = public_key().ok_or("This build of TrackCut can't check licences. Download it from mayorana.ch.")?;
     let license = license::verify(key, &public).map_err(|e: LicenseError| e.to_string())?;
     let f = file().ok_or("No settings folder to keep the licence in.")?;
     let key: String = key.chars().filter(|c| !c.is_whitespace()).collect();

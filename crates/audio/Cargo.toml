@@ -1,5 +1,5 @@
 [package]
-name = "splitter-audio"
+name = "trackcut-audio"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
@@ -14,5 +14,5 @@ symphonia.workspace = true
 cpal.workspace = true
 flacenc.workspace = true
 ebur128.workspace = true
-splitter-core.workspace = true
+trackcut-core.workspace = true
 mp3lame-encoder.workspace = true

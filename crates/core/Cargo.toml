@@ -1,5 +1,5 @@
 [package]
-name = "splitter-core"
+name = "trackcut-core"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true

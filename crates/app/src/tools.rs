@@ -27,7 +27,8 @@ pub struct Tools {
     pub deno: PathBuf,
 }
 
-/// %LOCALAPPDATA%\Splitter\tools, ~/Library/Application Support/Splitter/tools, ~/.local/share/Splitter/tools.
+/// %LOCALAPPDATA%\Splitter\tools, ~/Library/Application Support/Splitter/tools, ~/.local/share/Splitter/tools
+/// (the app's name before TrackCut: kept, so tools already downloaded are found).
 pub fn dir() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("Splitter").join("tools")
 }
@@ -289,7 +290,7 @@ mod tests {
     }
 
     /// Needs the network; installs ffmpeg into the app's real tools folder on first run.
-    /// `cargo test -p splitter -- --ignored ffmpeg`
+    /// `cargo test -p trackcut -- --ignored ffmpeg`
     #[test]
     #[ignore]
     fn installs_ffmpeg_with_x264() {

@@ -5,8 +5,8 @@ mod common;
 
 use common::*;
 use mp3lame_encoder::Bitrate;
-use splitter_audio::scan::scan;
-use splitter_audio::source::open_source;
+use trackcut_audio::scan::scan;
+use trackcut_audio::source::open_source;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ fn mp3_cbr_index_and_seek_are_exact() {
     encode_mp3(&path, Mp3Mode::Cbr(Bitrate::Kbps128));
     check_seeks(&path, RATE as u64 * SECS as u64);
     let scan = scan(&path, &mut |_| {}).unwrap();
-    assert!(matches!(scan.info.bitrate, splitter_audio::Bitrate::Cbr(128)));
+    assert!(matches!(scan.info.bitrate, trackcut_audio::Bitrate::Cbr(128)));
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn mp3_vbr_index_and_seek_are_exact() {
     encode_mp3(&path, Mp3Mode::Vbr);
     check_seeks(&path, RATE as u64 * SECS as u64);
     let scan = scan(&path, &mut |_| {}).unwrap();
-    assert!(matches!(scan.info.bitrate, splitter_audio::Bitrate::Vbr { .. }), "{:?}", scan.info.bitrate);
+    assert!(matches!(scan.info.bitrate, trackcut_audio::Bitrate::Vbr { .. }), "{:?}", scan.info.bitrate);
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn mp4_video_audio_seek_is_exact() {
     let s = scan(&path, &mut |_| {}).unwrap();
     assert_eq!(s.info.codec, "AAC");
     assert!(
-        matches!(s.info.bitrate, splitter_audio::Bitrate::Avg(k) if (48..=96).contains(&k)),
+        matches!(s.info.bitrate, trackcut_audio::Bitrate::Avg(k) if (48..=96).contains(&k)),
         "the picture must not count: {:?}",
         s.info.bitrate
     );

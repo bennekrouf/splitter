@@ -5,10 +5,10 @@ mod common;
 
 use common::*;
 use mp3lame_encoder::Bitrate;
-use splitter_audio::export::{export, ExportJob, Tags};
-use splitter_audio::scan::scan;
-use splitter_audio::source::open_source;
-use splitter_core::export::Profile;
+use trackcut_audio::export::{export, ExportJob, Tags};
+use trackcut_audio::scan::scan;
+use trackcut_audio::source::open_source;
+use trackcut_core::export::Profile;
 use std::path::Path;
 use std::sync::Arc;
 

@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use mp3lame_encoder::{Bitrate, Builder, FlushNoGap, InterleavedPcm, Quality, VbrMode};
-use splitter_audio::source::PcmSource;
+use trackcut_audio::source::PcmSource;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,7 @@ pub fn signal() -> Vec<i16> {
 }
 
 pub fn tmp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("splitter-tests");
+    let dir = std::env::temp_dir().join("trackcut-tests");
     std::fs::create_dir_all(&dir).unwrap();
     dir.join(name)
 }

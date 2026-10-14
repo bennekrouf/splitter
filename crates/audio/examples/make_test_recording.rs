@@ -1,7 +1,7 @@
 //! Generate a long "live recording" for trying the app: synthetic tracks separated by short
 //! silent gaps, encoded as VBR MP3 (plus a short WAV).
 //!
-//!     cargo run -p splitter-audio --release --example make_test_recording -- testdata 60
+//!     cargo run -p trackcut-audio --release --example make_test_recording -- testdata 60
 
 use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm, Quality, VbrMode};
 use std::f32::consts::TAU;

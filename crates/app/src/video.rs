@@ -17,13 +17,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 
-/// Installs `window.splitterVideo.sync(t, playing, hard)`, which steers the `<video>`.
+/// Installs `window.trackcutVideo.sync(t, playing, hard)`, which steers the `<video>`.
 const SYNC_JS: &str = r#"
-window.splitterVideo = {
+window.trackcutVideo = {
   // How far ahead of the playhead to aim a jump while playing: the web view takes a moment to
   // seek and to start playing, and then plays smoothly. Learned from how far off it settles,
   // and kept from one video to the next (about 0.4 s in WebKit on macOS).
-  lead: (window.splitterVideo && window.splitterVideo.lead) || 0.4,
+  lead: (window.trackcutVideo && window.trackcutVideo.lead) || 0.4,
   jumped: false,
   // The previous drift reading while playing: a jump stalls the picture for a moment, so only
   // two readings that agree are worth acting on.
@@ -113,7 +113,7 @@ pub fn VideoPreview(path: PathBuf, rate: u32) -> Element {
             return;
         }
         *s = Sent { secs, playing, at: Instant::now(), loads };
-        document::eval(&format!("window.splitterVideo && window.splitterVideo.sync({secs}, {playing}, {hard})"));
+        document::eval(&format!("window.trackcutVideo && window.trackcutVideo.sync({secs}, {playing}, {hard})"));
     });
 
     let Some(url) = url else {

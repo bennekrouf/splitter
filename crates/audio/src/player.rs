@@ -71,7 +71,7 @@ impl Player {
         let shared = Arc::new(Shared { stop_at: AtomicU64::new(u64::MAX), ..Default::default() });
         let s = shared.clone();
         std::thread::Builder::new()
-            .name("splitter-audio".into())
+            .name("trackcut-audio".into())
             .spawn(move || Engine::new(s).run(rx))
             .expect("spawn audio thread");
         Self { tx, shared }
@@ -248,7 +248,7 @@ impl Engine {
     }
 
     fn report(&self, e: anyhow::Error) {
-        eprintln!("splitter audio: {e:#}");
+        eprintln!("trackcut audio: {e:#}");
         *self.shared.error.lock().unwrap() = Some(format!("{e:#}"));
     }
 
@@ -415,7 +415,7 @@ impl Engine {
                 Err(e) => {
                     cur.eos = true;
                     s.eos.store(true, Relaxed);
-                    eprintln!("splitter audio: decode error: {e:#}");
+                    eprintln!("trackcut audio: decode error: {e:#}");
                 }
             }
         }
@@ -473,7 +473,7 @@ impl Engine {
                         cb.playing.store(false, Relaxed);
                     }
                 },
-                |e| eprintln!("splitter audio: stream error: {e}"),
+                |e| eprintln!("trackcut audio: stream error: {e}"),
                 None,
             )
             .context("opening audio output")?;
