@@ -1,4 +1,4 @@
-//! Splitter Pro licences, checked offline.
+//! TrackCut Pro licences, checked offline.
 //!
 //! mayorana.ch signs each licence when it is bought (api0's store, `payment::license`)
 //! with a private Ed25519 key; the app holds the public half and checks the signature, so
@@ -17,7 +17,8 @@ use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 
-/// The product name in every Splitter licence.
+/// The product id in every TrackCut licence. The app was called Splitter when
+/// the first keys were sold, and a key names its product, so the id stays.
 pub const PRODUCT: &str = "splitter";
 
 /// How many tracks of one recording the free version exports. Splitting and reviewing
@@ -60,12 +61,12 @@ impl std::fmt::Display for LicenseError {
         match self {
             Self::Malformed => write!(f, "This isn't a complete licence key. Copy the whole key from the email."),
             Self::BadSignature => write!(f, "This licence key isn't valid."),
-            Self::OtherProduct(p) => write!(f, "This is a licence for {p}, not Splitter."),
+            Self::OtherProduct(p) => write!(f, "This is a licence for {p}, not TrackCut."),
         }
     }
 }
 
-/// The licence in `key`, if `public_key` signed it and it is for Splitter. Whitespace is
+/// The licence in `key`, if `public_key` signed it and it is for TrackCut. Whitespace is
 /// ignored, since keys pasted from an email are often wrapped.
 pub fn verify(key: &str, public_key: &[u8; 32]) -> Result<License, LicenseError> {
     let key: String = key.chars().filter(|c| !c.is_whitespace()).collect();
@@ -140,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn a_licence_for_another_app_is_not_a_splitter_licence() {
+    fn a_licence_for_another_app_is_not_a_trackcut_licence() {
         let (signer, public) = keys();
         let key = sign(&PAYLOAD.replace("splitter", "other"), &signer);
         assert_eq!(verify(&key, &public), Err(LicenseError::OtherProduct("other".into())));

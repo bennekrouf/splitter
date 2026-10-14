@@ -1,9 +1,9 @@
 [application]
-name = "splitter"
+name = "trackcut"
 default_platform = "desktop"
 
 [desktop]
-title = "Splitter"
+title = "TrackCut"
 
 [bundle]
 identifier = "com.splitter.app"

@@ -20,7 +20,7 @@
 set -euo pipefail
 
 CARGO="Cargo.toml"
-FORMULA="${FORMULA_PATH:-$HOME/code/homebrew-splitter/Formula/splitter.rb}"
+FORMULA="${FORMULA_PATH:-$HOME/code/homebrew-trackcut/Formula/trackcut.rb}"
 DRY_RUN=false
 ALLOW_NO_NOTES=false
 
@@ -181,4 +181,4 @@ git push origin "$TAG"
 
 echo ""
 echo "🚀  $TAG pushed"
-echo "    https://github.com/bennekrouf/splitter/releases/tag/$TAG"
+echo "    https://github.com/bennekrouf/trackcut/releases/tag/$TAG"

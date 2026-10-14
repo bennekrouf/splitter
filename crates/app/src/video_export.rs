@@ -2,11 +2,11 @@
 //! re-encoded (H.264 + AAC), and the cleaned copy of "Apply cuts" for a video.
 //!
 //! Positions come in as our sample frames and go to ffmpeg as seconds on the video's own
-//! timeline, which skips the AAC priming we decode (`splitter_audio::mp4`).
+//! timeline, which skips the AAC priming we decode (`trackcut_audio::mp4`).
 //! A video without sound gives clips and copies without sound.
 
-use splitter_audio::export::Tags;
-use splitter_core::export::VideoProfile;
+use trackcut_audio::export::Tags;
+use trackcut_core::export::VideoProfile;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -21,7 +21,7 @@ pub struct Timeline {
 
 impl Timeline {
     pub fn of(path: &Path, rate: u32) -> Self {
-        Self { rate, delay: splitter_audio::mp4::audio_delay_secs(path).unwrap_or(0.0) }
+        Self { rate, delay: trackcut_audio::mp4::audio_delay_secs(path).unwrap_or(0.0) }
     }
 
     pub fn secs(&self, frame: u64) -> f64 {
@@ -46,7 +46,7 @@ pub struct Clip<'a> {
 
 /// Whether `source` has a sound track to carry over.
 fn has_sound(source: &Path) -> bool {
-    splitter_audio::mp4::silent_video_secs(source).is_none()
+    trackcut_audio::mp4::silent_video_secs(source).is_none()
 }
 
 /// Encoding settings shared by clips and cleaned copies.
@@ -240,11 +240,11 @@ mod tests {
             return;
         }
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../audio/tests/fixtures/silent.mp4");
-        let scan = splitter_audio::scan::scan(&source, &mut |_| {}).unwrap();
+        let scan = trackcut_audio::scan::scan(&source, &mut |_| {}).unwrap();
         assert!(scan.info.silent);
         let rate = scan.info.sample_rate as u64;
         let timeline = Timeline::of(&source, rate as u32);
-        let dir = std::env::temp_dir().join("splitter-silent-video-test");
+        let dir = std::env::temp_dir().join("trackcut-silent-video-test");
         let _ = std::fs::remove_dir_all(&dir);
         let tags = Tags { title: "Clip".into(), album: "X".into(), track: 1, total: 1, replaygain: None };
         let clip_path = dir.join("clip.mp4");
@@ -262,14 +262,14 @@ mod tests {
         )
         .unwrap();
         for (path, want) in [(&clip_path, 1.5), (&copy, 2.0)] {
-            let secs = splitter_audio::mp4::silent_video_secs(path).expect("picture only");
+            let secs = trackcut_audio::mp4::silent_video_secs(path).expect("picture only");
             assert!((secs - want).abs() < 0.25, "{}: {secs} s", path.display());
         }
     }
 
     /// Exports two clips from the fixture with the installed ffmpeg and checks that each one
     /// has exactly the source's sound for its range. Skipped when ffmpeg isn't installed
-    /// (`cargo test -p splitter -- --ignored ffmpeg` installs it).
+    /// (`cargo test -p trackcut -- --ignored ffmpeg` installs it).
     #[test]
     fn clips_are_cut_exactly() {
         let ffmpeg = crate::tools::dir().join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX));
@@ -278,9 +278,9 @@ mod tests {
             return;
         }
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../audio/tests/fixtures/video.mp4");
-        let scan = splitter_audio::scan::scan(&source, &mut |_| {}).unwrap();
+        let scan = trackcut_audio::scan::scan(&source, &mut |_| {}).unwrap();
         let timeline = Timeline::of(&source, scan.info.sample_rate);
-        let dir = std::env::temp_dir().join("splitter-video-export-test");
+        let dir = std::env::temp_dir().join("trackcut-video-export-test");
         let _ = std::fs::remove_dir_all(&dir);
         let tags = Tags { title: "Été".into(), album: "Live".into(), track: 1, total: 2, replaygain: None };
         let rate = scan.info.sample_rate as u64;
@@ -313,7 +313,7 @@ mod tests {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../audio/tests/fixtures/video.mp4");
         let rate = 44100u64;
         let timeline = Timeline::of(&source, rate as u32);
-        let dst = std::env::temp_dir().join("splitter-video-cleaned-test.mp4");
+        let dst = std::env::temp_dir().join("trackcut-video-cleaned-test.mp4");
         let (a, b) = ((rate, 4 * rate), (7 * rate, 10 * rate));
         let ranges = [(a.0 + 1024, a.1 + 1024), (b.0 + 1024, b.1 + 1024)];
         write_ranges(&ffmpeg, &source, timeline, &ranges, &dst, VideoProfile::default(), &mut |_| {}).unwrap();

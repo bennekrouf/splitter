@@ -5059,57 +5059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "splitter"
-version = "0.1.19"
-dependencies = [
- "base64 0.22.1",
- "crossbeam-channel",
- "dioxus",
- "dirs",
- "getrandom 0.3.4",
- "image",
- "rfd 0.15.4",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "splitter-audio",
- "splitter-core",
- "symphonia",
- "tokio",
- "trash",
- "ureq",
- "winresource",
- "zip",
-]
-
-[[package]]
-name = "splitter-audio"
-version = "0.1.19"
-dependencies = [
- "anyhow",
- "bincode",
- "cpal",
- "crossbeam-channel",
- "dirs",
- "ebur128",
- "flacenc",
- "mp3lame-encoder",
- "serde",
- "splitter-core",
- "symphonia",
-]
-
-[[package]]
-name = "splitter-core"
-version = "0.1.19"
-dependencies = [
- "base64 0.22.1",
- "ed25519-dalek",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5763,6 +5712,57 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "trackcut"
+version = "0.1.19"
+dependencies = [
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "dioxus",
+ "dirs",
+ "getrandom 0.3.4",
+ "image",
+ "rfd 0.15.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "symphonia",
+ "tokio",
+ "trackcut-audio",
+ "trackcut-core",
+ "trash",
+ "ureq",
+ "winresource",
+ "zip",
+]
+
+[[package]]
+name = "trackcut-audio"
+version = "0.1.19"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "cpal",
+ "crossbeam-channel",
+ "dirs",
+ "ebur128",
+ "flacenc",
+ "mp3lame-encoder",
+ "serde",
+ "symphonia",
+ "trackcut-core",
+]
+
+[[package]]
+name = "trackcut-core"
+version = "0.1.19"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

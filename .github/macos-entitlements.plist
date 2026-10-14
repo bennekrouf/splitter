@@ -11,7 +11,7 @@
   <true/>
 
   <!-- User-selected file access: the rfd folder picker for recordings.
-       Audio output needs no entitlement (only input would), and Splitter
+       Audio output needs no entitlement (only input would), and TrackCut
        makes no network connections, so there is no network.client here. -->
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>

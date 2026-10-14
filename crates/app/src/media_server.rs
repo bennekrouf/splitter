@@ -34,7 +34,7 @@ fn server() -> Option<&'static Server> {
             let listener = TcpListener::bind(("127.0.0.1", 0)).ok()?;
             let port = listener.local_addr().ok()?.port();
             std::thread::Builder::new()
-                .name("splitter-media".into())
+                .name("trackcut-media".into())
                 .spawn(move || {
                     for stream in listener.incoming().flatten() {
                         std::thread::spawn(move || {
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn serves_only_published_files_with_ranges() {
-        let path = std::env::temp_dir().join("splitter-media-test.mp4");
+        let path = std::env::temp_dir().join("trackcut-media-test.mp4");
         std::fs::write(&path, b"0123456789").unwrap();
         let url = publish(&path).unwrap();
         let get = |url: &str, range: Option<&str>| {

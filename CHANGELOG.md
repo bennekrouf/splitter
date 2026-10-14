@@ -1,10 +1,10 @@
 # Changelog
 
-What changed in each release of **Splitter**, the keyboard-driven tool for
+What changed in each release of **TrackCut**, the keyboard-driven tool for
 splitting long recordings into tracks.
 
 The public version of this page — with the download for each release — lives at
-<https://mayorana.ch/en/apps/splitter/releases>. It is generated from this file
+<https://mayorana.ch/en/apps/trackcut/releases>. It is generated from this file
 by `scripts/changelog_to_json.py`, so this file is the only place a release note
 is written.
 
@@ -15,11 +15,21 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Changed
+
+- Splitter is now called TrackCut. Your Pro licence, settings, downloaded
+  tools and the edits saved in your folders all carry over: a folder's
+  `splitter.cutlist.json` is still read, and becomes `trackcut.cutlist.json`
+  the first time you change something in it. On macOS the update installs as
+  TrackCut.app; once it runs, you can delete Splitter.app from Applications.
+
 ## [0.1.19] - 2026-10-07
 
 ### Changed
 
-- Splitter now uses the PolyForm Noncommercial License 1.0.0 and has updated
+- TrackCut now uses the PolyForm Noncommercial License 1.0.0 and has updated
   branding. This means the software is free for personal use, but commercial use
   requires a license. The company name has changed to Mayorana, and the
   copyright notice has been updated accordingly.
@@ -28,7 +38,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Added
 
-- Splitter now shares anonymous usage statistics: whether it is installed and
+- TrackCut now shares anonymous usage statistics: whether it is installed and
   opened, its version and your operating system. It is on by default; a note at
   the bottom of the window tells you once, and nothing is sent before you have
   seen it. **Turn off** there stops it for good and deletes anything not yet
@@ -63,20 +73,20 @@ user sees in the update prompt should all be accounted for.
 
 ### Added
 
-- The version you are running now shows next to the Splitter name at the top
+- The version you are running now shows next to the TrackCut name at the top
   of the sidebar and in the window title, so it is at hand when you report a
   problem or check whether an update installed.
 - A **Get Pro…** button at the top of the file list opens the licence window,
-  where you buy Splitter Pro or paste your key. It reads **Pro ✓** once your
-  licence is active. Clicking **Splitter** still opens the same window.
+  where you buy TrackCut Pro or paste your key. It reads **Pro ✓** once your
+  licence is active. Clicking **TrackCut** still opens the same window.
 
 ## [0.1.13] - 2026-09-27
 
 ### Changed
 
-- Without Splitter Pro, an export now writes the first 10 tracks of each
+- Without TrackCut Pro, an export now writes the first 10 tracks of each
   recording. Splitting, reviewing and naming are not limited: when a recording
-  has more tracks, the export bar says how many and **Splitter Pro exports all**
+  has more tracks, the export bar says how many and **TrackCut Pro exports all**
   opens the licence window. A vinyl side, an EP or a short set still fits in
   the free version; with Pro, every track is exported, as before.
 
@@ -84,7 +94,7 @@ user sees in the update prompt should all be accounted for.
 
 ### Added
 
-- Splitter Pro licences. Click **Splitter** at the top of the file list to
+- TrackCut Pro licences. Click **TrackCut** at the top of the file list to
   paste the licence key from your purchase email. The key is checked on your
   computer, with no account and nothing sent anywhere, and a **Pro** badge
   shows once it is active. **Remove from this computer** frees it for another
@@ -125,7 +135,7 @@ user sees in the update prompt should all be accounted for.
 ### Changed
 
 - The notes for every release, with its download, are now published at
-  [mayorana.ch/en/apps/splitter/releases](https://mayorana.ch/en/apps/splitter/releases).
+  [mayorana.ch/en/apps/trackcut/releases](https://mayorana.ch/en/apps/trackcut/releases).
 
 ## [0.1.6] - 2026-09-24
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-linux.sh — one-time setup for Splitter on Linux (Debian/Ubuntu/Fedora/Arch)
+# setup-linux.sh — one-time setup for TrackCut on Linux (Debian/Ubuntu/Fedora/Arch)
 #
 # Installs the GUI and audio runtime libraries: WebKitGTK, libxdo and ALSA
 # (playback goes through ALSA; PulseAudio/PipeWire provide an ALSA device).
@@ -81,34 +81,34 @@ esac
 
 # ── Desktop shortcut (optional) ───────────────────────────────────────────────
 BINARY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DESKTOP_FILE="/usr/share/applications/splitter.desktop"
+DESKTOP_FILE="/usr/share/applications/trackcut.desktop"
 
 # Register the bundled icon with the hicolor theme so launchers pick it up.
 # Falls back to a generic audio icon if the PNG isn't shipped.
 ICON_NAME="audio-x-generic"
 if [[ -f "$BINARY_DIR/icon.png" ]]; then
   ICON_DIR="/usr/share/icons/hicolor/256x256/apps"
-  install -Dm644 "$BINARY_DIR/icon.png" "$ICON_DIR/splitter.png"
+  install -Dm644 "$BINARY_DIR/icon.png" "$ICON_DIR/trackcut.png"
   if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
   fi
-  ICON_NAME="splitter"
-  ok "Icon installed to $ICON_DIR/splitter.png"
+  ICON_NAME="trackcut"
+  ok "Icon installed to $ICON_DIR/trackcut.png"
 fi
 
-if [[ -f "$BINARY_DIR/splitter" && ! -f "$DESKTOP_FILE" ]]; then
+if [[ -f "$BINARY_DIR/trackcut" && ! -f "$DESKTOP_FILE" ]]; then
   info "Creating .desktop launcher..."
   cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
-Name=Splitter
+Name=TrackCut
 Comment=Split long MP3/WAV recordings into tracks
-Exec=$BINARY_DIR/splitter %f
+Exec=$BINARY_DIR/trackcut %f
 Icon=$ICON_NAME
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;AudioVideoEditing;
 MimeType=audio/mpeg;audio/x-wav;audio/wav;inode/directory;
-StartupWMClass=splitter
+StartupWMClass=trackcut
 EOF
   if command -v update-desktop-database &>/dev/null; then
     update-desktop-database -q /usr/share/applications || true
@@ -117,4 +117,4 @@ EOF
 fi
 
 echo ""
-echo "Setup complete. Run ./splitter to start the app."
+echo "Setup complete. Run ./trackcut to start the app."

@@ -162,7 +162,7 @@ jobs:
         env:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
-          SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          TRACKCUT_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
           # Where anonymous usage statistics go (repository variable, not a
           # secret). Unset, the build sends nothing and never asks.
           MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
@@ -173,7 +173,7 @@ jobs:
         if: env.HAVE_MAC_SECRETS == 'true'
         run: |
           set -euo pipefail
-          BIN=target/aarch64-apple-darwin/release/splitter
+          BIN=target/aarch64-apple-darwin/release/trackcut
           codesign --force --options runtime --timestamp \
             --entitlements .github/macos-entitlements.plist \
             --sign "$SIGNING_IDENTITY" \
@@ -210,14 +210,14 @@ jobs:
         if: env.HAVE_MAC_SECRETS == 'true'
         run: |
           set -euo pipefail
-          BIN=target/aarch64-apple-darwin/release/splitter
+          BIN=target/aarch64-apple-darwin/release/trackcut
           VER="${GITHUB_REF_NAME#v}"
-          APP="dist/Splitter.app"
+          APP="dist/TrackCut.app"
 
           # 1. Construct the .app bundle around the cargo-built binary.
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp "$BIN" "$APP/Contents/MacOS/splitter"
-          chmod +x "$APP/Contents/MacOS/splitter"
+          cp "$BIN" "$APP/Contents/MacOS/trackcut"
+          chmod +x "$APP/Contents/MacOS/trackcut"
 
           ICON_KEY=""
           if [ -f dist/icon.icns ]; then
@@ -229,10 +229,10 @@ jobs:
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>splitter</string>
+            <key>CFBundleExecutable</key><string>trackcut</string>
             <key>CFBundleIdentifier</key><string>com.splitter.app</string>
-            <key>CFBundleName</key><string>Splitter</string>
-            <key>CFBundleDisplayName</key><string>Splitter</string>
+            <key>CFBundleName</key><string>TrackCut</string>
+            <key>CFBundleDisplayName</key><string>TrackCut</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleShortVersionString</key><string>$VER</string>
             <key>CFBundleVersion</key><string>$VER</string>
@@ -253,25 +253,25 @@ jobs:
           mkdir -p dmg-staging
           cp -R "$APP" dmg-staging/
           ln -s /Applications dmg-staging/Applications
-          hdiutil create -volname "Splitter" -srcfolder dmg-staging \
-            -ov -format UDZO dist/splitter-macos-arm64.dmg
+          hdiutil create -volname "TrackCut" -srcfolder dmg-staging \
+            -ov -format UDZO dist/trackcut-macos-arm64.dmg
           codesign --force --timestamp --sign "$SIGNING_IDENTITY" \
-            dist/splitter-macos-arm64.dmg
+            dist/trackcut-macos-arm64.dmg
 
           # 4. Notarize the DMG (covers the binary inside via hash) and staple.
           P8="$RUNNER_TEMP/AuthKey_${APP_STORE_KEY_ID}.p8"
           echo "$APP_STORE_KEY" | base64 --decode > "$P8"
 
-          xcrun notarytool submit dist/splitter-macos-arm64.dmg \
+          xcrun notarytool submit dist/trackcut-macos-arm64.dmg \
             --key "$P8" \
             --key-id "$APP_STORE_KEY_ID" \
             --issuer "$APP_STORE_ISSUER_ID" \
             --wait
-          xcrun stapler staple dist/splitter-macos-arm64.dmg
-          xcrun stapler validate dist/splitter-macos-arm64.dmg
+          xcrun stapler staple dist/trackcut-macos-arm64.dmg
+          xcrun stapler validate dist/trackcut-macos-arm64.dmg
 
-          shasum -a 256 dist/splitter-macos-arm64.dmg \
-            > dist/splitter-macos-arm64.dmg.sha256
+          shasum -a 256 dist/trackcut-macos-arm64.dmg \
+            > dist/trackcut-macos-arm64.dmg.sha256
 
       - name: Clean up keychain
         if: always() && env.HAVE_MAC_SECRETS == 'true'
@@ -282,10 +282,10 @@ jobs:
         if: env.HAVE_MAC_SECRETS == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: splitter-macos-arm64
+          name: trackcut-macos-arm64
           path: |
-            dist/splitter-macos-arm64.dmg
-            dist/splitter-macos-arm64.dmg.sha256
+            dist/trackcut-macos-arm64.dmg
+            dist/trackcut-macos-arm64.dmg.sha256
 
   build-windows:
     needs: [prepare]
@@ -323,7 +323,7 @@ jobs:
         env:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
-          SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          TRACKCUT_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
           # Where anonymous usage statistics go (repository variable, not a
           # secret). Unset, the build sends nothing and never asks.
           MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
@@ -338,7 +338,7 @@ jobs:
 
       # ── Windows code signing ───────────────────────────────────────────────
       # Both the application binary and the installer get signed, in that
-      # order: Inno Setup embeds whatever splitter.exe it finds, so signing
+      # order: Inno Setup embeds whatever trackcut.exe it finds, so signing
       # after packaging would leave an unsigned binary inside a signed
       # installer — SmartScreen and enterprise policies both object to that.
       #
@@ -422,9 +422,9 @@ jobs:
       - name: Checksum installer
         shell: pwsh
         run: |
-          $hash = (Get-FileHash dist\splitter-setup.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  splitter-setup.exe" | Out-File "dist\splitter-setup.exe.sha256" -Encoding ASCII
-          Write-Host "Installer: dist\splitter-setup.exe ($([math]::Round((Get-Item dist\splitter-setup.exe).Length/1MB,1)) MB)"
+          $hash = (Get-FileHash dist\trackcut-setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  trackcut-setup.exe" | Out-File "dist\trackcut-setup.exe.sha256" -Encoding ASCII
+          Write-Host "Installer: dist\trackcut-setup.exe ($([math]::Round((Get-Item dist\trackcut-setup.exe).Length/1MB,1)) MB)"
 
       # Signing provider: the steps above use Azure Trusted Signing. SignPath
       # Foundation is the free alternative for open-source projects, but it
@@ -434,10 +434,10 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: splitter-windows
+          name: trackcut-windows
           path: |
-            dist\splitter-setup.exe
-            dist\splitter-setup.exe.sha256
+            dist\trackcut-setup.exe
+            dist\trackcut-setup.exe.sha256
 
   build-linux:
     needs: [prepare]
@@ -479,7 +479,7 @@ jobs:
         env:
           # Public half of the key mayorana.ch signs Pro licences with (repository
           # variable, not a secret). Without it the build can't check licences.
-          SPLITTER_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
+          TRACKCUT_LICENSE_PUBLIC_KEY: ${{ vars.SPLITTER_LICENSE_PUBLIC_KEY }}
           # Where anonymous usage statistics go (repository variable, not a
           # secret). Unset, the build sends nothing and never asks.
           MAYORANA_TELEMETRY_URL: ${{ vars.MAYORANA_TELEMETRY_URL }}
@@ -487,10 +487,10 @@ jobs:
 
       - name: Package tar.gz
         run: |
-          NAME="splitter-linux-x86_64"
+          NAME="trackcut-linux-x86_64"
           DIST="dist/$NAME"
           mkdir -p "$DIST"
-          cp target/x86_64-unknown-linux-gnu/release/splitter "$DIST/"
+          cp target/x86_64-unknown-linux-gnu/release/trackcut "$DIST/"
           cp scripts/setup-linux.sh "$DIST/"
           cp README.md "$DIST/" 2>/dev/null || true
           chmod +x "$DIST/setup-linux.sh"
@@ -509,10 +509,10 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: splitter-linux-x86_64
+          name: trackcut-linux-x86_64
           path: |
-            splitter-linux-x86_64.tar.gz
-            splitter-linux-x86_64.tar.gz.sha256
+            trackcut-linux-x86_64.tar.gz
+            trackcut-linux-x86_64.tar.gz.sha256
 
   release:
     needs: [prepare, build-mac, build-windows, build-linux]
@@ -557,11 +557,11 @@ jobs:
           # Versioned, immutable URLs — the same paths the publish step below
           # rsyncs to. Override with the DOWNLOAD_BASE_URL repo variable if the
           # download host ever moves.
-          BASE="${DL_BASE:-https://mayorana.ch/downloads/splitter}"
+          BASE="${DL_BASE:-https://mayorana.ch/downloads/trackcut}"
           BASE="${BASE%/}/$TAG"
-          MAC_DMG="splitter-macos-arm64.dmg"
-          WIN_EXE="splitter-setup.exe"
-          LINUX_TGZ="splitter-linux-x86_64.tar.gz"
+          MAC_DMG="trackcut-macos-arm64.dmg"
+          WIN_EXE="trackcut-setup.exe"
+          LINUX_TGZ="trackcut-linux-x86_64.tar.gz"
 
           sha() { [ -n "$1" ] && [ -f "release/$1" ] && sha256sum "release/$1" | awk '{print $1}' || echo ""; }
           # Empty when that platform's build failed, so the in-app update banner
@@ -570,7 +570,7 @@ jobs:
 
           cat > release/latest.json <<EOF
           {
-            "name": "splitter",
+            "name": "trackcut",
             "version": "$VER",
             "tag": "$TAG",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -585,7 +585,7 @@ jobs:
 
       # ── Release notes feed ─────────────────────────────────────────────────
       # CHANGELOG.md is the only place a release note is written. This turns it
-      # into the feed the website renders at /apps/splitter/releases, and ships
+      # into the feed the website renders at /apps/trackcut/releases, and ships
       # it beside the builds rather than on the source host, for the same reason
       # latest.json lives there.
       #
@@ -609,23 +609,23 @@ jobs:
                  --date "$(date -u +%Y-%m-%d)" \
                  > release/releases.json; then
             echo "::warning::Could not build releases.json from CHANGELOG.md — keeping the published feed."
-            curl -fsS "https://mayorana.ch/downloads/splitter/latest/releases.json" \
+            curl -fsS "https://mayorana.ch/downloads/trackcut/latest/releases.json" \
                  -o release/releases.json \
-              || echo '{"name":"splitter","releases":[]}' > release/releases.json
+              || echo '{"name":"trackcut","releases":[]}' > release/releases.json
           fi
           python3 -c "import json; d=json.load(open('release/releases.json')); print(len(d['releases']), 'releases, newest', d['releases'][0]['version'] if d['releases'] else 'none')"
 
       # ── Publish the signed artifacts to mayorana.ch ────────────────────────
       # The binaries are the product and no longer ride on the public GitHub
       # Release. nginx on the VPS serves them straight off disk from
-      #   /var/www/mayorana-downloads/splitter/{<tag>,latest}/
+      #   /var/www/mayorana-downloads/trackcut/{<tag>,latest}/
       #
       # `latest/` is synced with --delete so it always matches exactly this
       # release: when a platform fails to build, its download 404s instead of
       # quietly serving the previous version under this version's checksum.
       #
       # No mkdir over ssh: the deploy key is confined with rrsync and gets no
-      # shell. rsync creates the final path component, and <root>/splitter
+      # shell. rsync creates the final path component, and <root>/trackcut
       # already exists on the server.
       #
       # Unset secrets = skip with a warning, so a fork or an unconfigured
@@ -659,7 +659,7 @@ jobs:
             exit 1
           fi
 
-          ROOT="${DEST_ROOT:-}/splitter"
+          ROOT="${DEST_ROOT:-}/trackcut"
 
           install -m 700 -d ~/.ssh
           trap 'rm -f ~/.ssh/dist_key' EXIT
@@ -701,7 +701,7 @@ jobs:
           if [ -n "$CHANGES" ]; then
             printf "## What's new in %s\n\n%s\n\n" "$TAG" "$CHANGES" >> notes.md
           fi
-          printf '%s\n\n' "Every version, with its notes: **[mayorana.ch/en/apps/splitter/releases](https://mayorana.ch/en/apps/splitter/releases)**" >> notes.md
+          printf '%s\n\n' "Every version, with its notes: **[mayorana.ch/en/apps/trackcut/releases](https://mayorana.ch/en/apps/trackcut/releases)**" >> notes.md
 
           # The standing download instructions, appended below whatever this
           # release changed. Quoted heredoc: the shell must not touch the
@@ -710,25 +710,25 @@ jobs:
           ## Download
 
           ### macOS (Apple Silicon)
-          Download `splitter-macos-arm64.dmg`, open it, and drag Splitter to /Applications.
+          Download `trackcut-macos-arm64.dmg`, open it, and drag TrackCut to /Applications.
           Signed with Apple Developer ID and notarized — opens with a normal double-click.
           (Only shipped once the macOS signing secrets are configured — see the workflow.)
 
           ### Windows
-          Download `splitter-setup.exe` and run it — the installer handles everything.
+          Download `trackcut-setup.exe` and run it — the installer handles everything.
 
           ### Linux (x86_64)
           ```bash
-          curl -L https://mayorana.ch/downloads/splitter/${{ needs.prepare.outputs.tag || github.ref_name }}/splitter-linux-x86_64.tar.gz | tar xz
-          cd splitter-linux-x86_64
-          sudo ./setup-linux.sh && ./splitter
+          curl -L https://mayorana.ch/downloads/trackcut/${{ needs.prepare.outputs.tag || github.ref_name }}/trackcut-linux-x86_64.tar.gz | tar xz
+          cd trackcut-linux-x86_64
+          sudo ./setup-linux.sh && ./trackcut
           ```
 
           > **Linux runtime requirements**: `libwebkit2gtk-4.1` and ALSA (both installed by `setup-linux.sh`).
           EOF
 
           gh release create "$TAG" \
-            --title "Splitter $TAG" \
+            --title "TrackCut $TAG" \
             --notes-file notes.md \
             release/latest.json \
             release/releases.json

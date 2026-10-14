@@ -1,4 +1,4 @@
-# Splitter
+# TrackCut
 
 Keyboard-driven tool for splitting long MP3/WAV recordings into tracks. Rust + Dioxus desktop.
 Videos (MP4, M4V, MOV with AAC audio) open too: they're split on their sound and exported as
@@ -15,7 +15,7 @@ crates/app     Dioxus desktop UI
 ## Run
 
 ```bash
-cargo run -p splitter -- path/to/folder
+cargo run -p trackcut -- path/to/folder
 ```
 
 Or start without an argument and use **Open folder…** (⌘O).
@@ -56,13 +56,13 @@ the same way. ffmpeg is fetched on first use (about 30 MB, SHA-256 checked, into
 app.
 
 Symphonia decodes the AAC encoder's priming samples, which ffmpeg and the web views skip as the
-file's edit list says; `splitter_audio::mp4` reads that list so splits, the picture and the
+file's edit list says; `trackcut_audio::mp4` reads that list so splits, the picture and the
 clips line up to the sample. Only AAC-LC sound is supported (symphonia's decoder): HE-AAC and
 multichannel AAC, and MKV/WebM files, don't open yet.
 
 ### From a YouTube link
 
-**URL…** (⌘U) downloads a video's audio and opens it from `~/Music/Splitter/Downloads`. Pick
+**URL…** (⌘U) downloads a video's audio and opens it from `~/Music/TrackCut/Downloads`. Pick
 **Video** in the dialog to get the video instead: picture (H.264, up to 1080p) and sound are
 downloaded separately, as YouTube serves them, and merged into one MP4 with ffmpeg. Nothing
 needs installing: on first use the app fetches [yt-dlp](https://github.com/yt-dlp/yt-dlp)'s
@@ -71,38 +71,38 @@ needs for YouTube) into its data folder (`tools/`), checking both against their 
 sums. yt-dlp updates itself at most once a day. For audio it fetches the AAC (.m4a) or MP3
 stream, so no ffmpeg: AAC is decoded to WAV with symphonia; a video download fetches ffmpeg
 first (see Videos). Works on macOS, Windows and Linux (x86_64/arm64).
-The download tests need the network: `cargo test -p splitter -- --ignored download`, and
+The download tests need the network: `cargo test -p trackcut -- --ignored download`, and
 `--ignored ffmpeg` installs ffmpeg, after which the video export tests run against it.
 
 Generate a 60-minute test recording (tracks separated by 2 s gaps):
 
 ```bash
-cargo run -p splitter-audio --release --example make_test_recording -- testdata 60
+cargo run -p trackcut-audio --release --example make_test_recording -- testdata 60
 ```
 
 Export a folder from its cutlist without the UI, checking every track's length:
 
 ```bash
-cargo run -p splitter --release --example export_cutlist -- testdata --out /tmp/out --verify \
+cargo run -p trackcut --release --example export_cutlist -- testdata --out /tmp/out --verify \
     --profile mp3-v2 --normalize album:-14
 ```
 
 Scan and seek timings on any file:
 
 ```bash
-cargo run -p splitter-audio --release --example bench -- testdata/live-set-60min.mp3
+cargo run -p trackcut-audio --release --example bench -- testdata/live-set-60min.mp3
 ```
 
 ## Pro licence
 
-Click **Splitter** (top of the file list) to paste a Splitter Pro licence key. The key is
+Click **TrackCut** (top of the file list) to paste a TrackCut Pro licence key. The key is
 checked offline: api0's store signs it with an Ed25519 key when the Stripe Checkout is paid,
-and the app verifies it with the public half, built in from the `SPLITTER_LICENSE_PUBLIC_KEY`
+and the app verifies it with the public half, built in from the `TRACKCUT_LICENSE_PUBLIC_KEY`
 repository variable (standard base64, 32 bytes) by the release workflow. A local build without
-it says it can't check licences. The key is saved to the config folder (`splitter/licence`).
+it says it can't check licences. The key is saved to the config folder (`trackcut/licence`).
 
 A licence unlocks every release dated up to its `updates_until`; the build's date is
-`SPLITTER_RELEASE_DATE` if set, else the date of the commit it's built from (see
+`TRACKCUT_RELEASE_DATE` if set, else the date of the commit it's built from (see
 `crates/app/build.rs`).
 
 Without Pro an export writes the first 10 kept tracks of a recording (`FREE_TRACKS` in
@@ -191,7 +191,7 @@ and **⌘Z** right after applying removes the copy and goes back to the original
 always WAV: a byte-for-byte copy of a WAV source, or the decoded audio of an MP3 as 16-bit PCM,
 because MP3 frames can't be cut out of the middle without clicks. That's about 600 MB per hour.
 
-All edits are saved to `splitter.cutlist.json` in the recordings folder, right after each change.
+All edits are saved to `trackcut.cutlist.json` in the recordings folder, right after each change.
 Split positions are sample frames at the file's own rate, keyed by file name. The review loop
 itself (`step_from`, `confirm_and_next`, `delete_and_next`, undo) lives in
 `crates/core/src/edit.rs` and is unit-tested by replaying key sequences.
@@ -269,7 +269,7 @@ Same setup as GitAgent and the ais-* apps.
   tab): a signed and notarized `.dmg` for Apple Silicon, a signed Inno Setup installer for
   Windows (`installer/installer.iss`), and a Linux x86_64 tarball with `scripts/setup-linux.sh`
   (installs WebKitGTK and ALSA, and adds a launcher). Artifacts are published to
-  `mayorana.ch/downloads/splitter/{<tag>,latest}/` with a `latest.json`.
+  `mayorana.ch/downloads/trackcut/{<tag>,latest}/` with a `latest.json`.
 - **Cutting a release**: `./scripts/release.sh` (patch bump, or `--minor`, `--major`, a version,
   or `--dry-run`) bumps the workspace version, tags and pushes.
 
@@ -280,10 +280,10 @@ for Windows, and `DIST_SSH_*` for the upload. Without the macOS secrets the rele
 
 ## How it works
 
-- **Scan (once per file, cached in `~/Library/Caches/splitter`)**: builds a byte-offset index of every
+- **Scan (once per file, cached in `~/Library/Caches/trackcut`)**: builds a byte-offset index of every
   MP3 frame, min/max peaks at 5 zoom levels, and 50 ms RMS windows (used for silence detection).
   About 2 s for an hour of VBR MP3.
-- **Last folder**: reopened on start when no folder is given (`~/Library/Application Support/splitter`).
+- **Last folder**: reopened on start when no folder is given (`~/Library/Application Support/trackcut`).
 - **Seeking**: MP3 seeks reopen the demuxer at the indexed frame 2 frames before the target and
   discard up to the exact sample. The tests check that this is sample-identical to a straight decode on
   CBR, VBR and WAV.
@@ -301,11 +301,11 @@ Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
   charities, schools, universities and government institutions.
 - **Commercial use requires a licence** — including a solo consultant using it
   on client work, and an employee using it at their job. That licence is
-  [Splitter Pro](https://mayorana.ch/en/apps/splitter), bought on Splitter's
+  [TrackCut Pro](https://mayorana.ch/en/apps/trackcut), bought on TrackCut's
   page; see [Pro licence](#pro-licence) for how the key works.
 
 This is deliberately not an OSI-approved open source licence: the source is
-public and readable, but companies using it for work buy Splitter Pro.
+public and readable, but companies using it for work buy TrackCut Pro.
 
 The name, logo and icons are trademarks and are not covered by that licence —
 fork it and rebrand it. See [TRADEMARK.md](TRADEMARK.md).

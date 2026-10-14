@@ -1,18 +1,18 @@
-//! Export every recording in a folder from its `splitter.cutlist.json`, without the UI, and
+//! Export every recording in a folder from its `trackcut.cutlist.json`, without the UI, and
 //! optionally verify each track decodes (gaplessly) to exactly its planned length.
 //!
-//!     cargo run -p splitter --release --example export_cutlist -- testdata [--out DIR] [--verify]
+//!     cargo run -p trackcut --release --example export_cutlist -- testdata [--out DIR] [--verify]
 //!         [--profile original|mp3-v0|mp3-v2|mp3-v4|mp3-320|mp3-256|mp3-192|mp3-128|flac|wav16]
 //!         [--normalize track:-14|album:-16]
 //!
 //! Loudness is always measured, so tracks get ReplayGain tags; with `--verify` each exported
 //! track is measured again and its loudness printed.
 
-use splitter_audio::export::{can_copy, export, ExportJob, Tags};
-use splitter_audio::loudness::{analyze, apply_to_jobs, load_or_analyze};
-use splitter_audio::scan::{self as scanning, load_or_scan};
-use splitter_core::cutlist::Cutlist;
-use splitter_core::export::{plan, Normalize, Profile};
+use trackcut_audio::export::{can_copy, export, ExportJob, Tags};
+use trackcut_audio::loudness::{analyze, apply_to_jobs, load_or_analyze};
+use trackcut_audio::scan::{self as scanning, load_or_scan};
+use trackcut_core::cutlist::Cutlist;
+use trackcut_core::export::{plan, Normalize, Profile};
 use std::path::PathBuf;
 use std::time::Instant;
 

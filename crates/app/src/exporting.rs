@@ -6,12 +6,12 @@ use crate::tools;
 use crate::video_export::{export_clip, Clip, Timeline};
 use crossbeam_channel::{Receiver, Sender};
 use dioxus::prelude::*;
-use splitter_audio::export::{can_copy, export, ExportJob, Tags};
-use splitter_audio::loudness::{apply_to_jobs, load_or_analyze, LoudnessMap};
-use splitter_audio::{Bitrate, Scan};
-use splitter_core::export::{plan, Normalize, Profile, SourceFacts, VideoProfile};
-use splitter_core::license::exported_tracks;
-use splitter_core::Status;
+use trackcut_audio::export::{can_copy, export, ExportJob, Tags};
+use trackcut_audio::loudness::{apply_to_jobs, load_or_analyze, LoudnessMap};
+use trackcut_audio::{Bitrate, Scan};
+use trackcut_core::export::{plan, Normalize, Profile, SourceFacts, VideoProfile};
+use trackcut_core::license::exported_tracks;
+use trackcut_core::Status;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -91,7 +91,7 @@ impl Exporter {
         let generation = Arc::new(AtomicU64::new(0));
         let g = generation.clone();
         std::thread::Builder::new()
-            .name("splitter-export".into())
+            .name("trackcut-export".into())
             .spawn(move || {
                 for task in rx {
                     run(task, &g, &etx);
@@ -194,7 +194,7 @@ impl App {
         let settings = self.cutlist.peek().export.clone();
         let profile = settings.profile.effective(&source_facts(&path, &scan));
         // A video is exported as video clips, never as audio.
-        let video = splitter_core::is_video(&path).then_some(settings.video);
+        let video = trackcut_core::is_video(&path).then_some(settings.video);
         let ext = match video {
             Some(v) => v.extension().to_string(),
             None => profile.extension(&src_ext).to_string(),

@@ -2,11 +2,11 @@
 
 use crate::state::{key_of, App};
 use dioxus::prelude::*;
-use splitter_audio::Scan;
-use splitter_core::detect;
-use splitter_core::edit::{DetectParams, RecordingEdit, Silence, Split};
-use splitter_core::tracklist;
-use splitter_core::Status;
+use trackcut_audio::Scan;
+use trackcut_core::detect;
+use trackcut_core::edit::{DetectParams, RecordingEdit, Silence, Split};
+use trackcut_core::tracklist;
+use trackcut_core::Status;
 use std::path::Path;
 use std::time::Instant;
 

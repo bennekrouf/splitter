@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Splitter app icon.
+  TrackCut app icon.
   Same family as the ais-* apps and GitAgent: squircle ground, white glowing
-  mark, one hue per app. Splitter's hue is teal, which no sibling uses.
+  mark, one hue per app. TrackCut's hue is teal, which no sibling uses.
 
   The mark is the app in one picture: a waveform whose bars stop either side
   of a cut, with the split marker's head at the top of the cut line, the

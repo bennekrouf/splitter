@@ -10,14 +10,14 @@ use std::time::Duration;
 
 /// Served from mayorana.ch alongside the builds it describes, so update checks do not
 /// depend on the source repository staying publicly readable.
-const LATEST_URL: &str = "https://mayorana.ch/downloads/splitter/latest/latest.json";
+const LATEST_URL: &str = "https://mayorana.ch/downloads/trackcut/latest/latest.json";
 /// Fallback when `latest.json` has no build for this OS (e.g. an Intel Mac: only Apple
 /// Silicon is built), so the button leads somewhere to pick one instead of to a 404.
 const RELEASES_URL: &str = "https://mayorana.ch/en/apps";
 
 /// Lets the download logs tell an existing user updating from a new install, and which
 /// versions are still in use.
-const USER_AGENT: &str = concat!("splitter/", env!("CARGO_PKG_VERSION"), " (updater)");
+const USER_AGENT: &str = concat!("trackcut/", env!("CARGO_PKG_VERSION"), " (updater)");
 
 #[derive(Deserialize)]
 struct LatestJson {

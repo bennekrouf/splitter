@@ -6,13 +6,13 @@ use crate::review;
 use crate::state::{self, key_of, ScanState};
 use dioxus::html::input_data::MouseButton;
 use dioxus::prelude::*;
-use splitter_audio::{Bitrate, Scan};
-use splitter_core::edit::SplitState;
-use splitter_core::export::{plan, Normalize, Profile, VideoProfile};
-use splitter_core::loudness::Loudness;
-use splitter_core::time::{fmt_precise, fmt_short};
-use splitter_core::tracklist;
-use splitter_core::Status;
+use trackcut_audio::{Bitrate, Scan};
+use trackcut_core::edit::SplitState;
+use trackcut_core::export::{plan, Normalize, Profile, VideoProfile};
+use trackcut_core::loudness::Loudness;
+use trackcut_core::time::{fmt_precise, fmt_short};
+use trackcut_core::tracklist;
+use trackcut_core::Status;
 use std::fmt::Write;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 const CSS: &str = include_str!("../assets/style.css");
 /// Window title: the name and the running version, as in the other mayorana apps.
-pub const TITLE: &str = concat!("Splitter ", env!("CARGO_PKG_VERSION"));
+pub const TITLE: &str = concat!("TrackCut ", env!("CARGO_PKG_VERSION"));
 /// Waveform resolution; the SVG is stretched to the element width.
 const COLS: usize = 1600;
 /// How close (in pixels) a click must be to grab a split marker.
@@ -283,7 +283,7 @@ pub fn App() -> Element {
         if let Some(info) = update() {
             div { class: "update-banner",
                 span { class: "update-banner-text",
-                    "Splitter "
+                    "TrackCut "
                     strong { "{info.latest_version}" }
                     " is available (you have {env!(\"CARGO_PKG_VERSION\")})."
                 }
@@ -305,7 +305,7 @@ pub fn App() -> Element {
         if ask_consent() {
             div { class: "consent-banner",
                 span { class: "update-banner-text",
-                    strong { "Splitter shares anonymous usage statistics. " }
+                    strong { "TrackCut shares anonymous usage statistics. " }
                     "Whether it is installed and opened, and its version and operating system \
                      — never your recordings, files or anything you type."
                 }
@@ -383,12 +383,12 @@ fn Sidebar() -> Element {
                 div { class: "brand-wrap",
                     button {
                         class: "brand",
-                        title: "Splitter Pro licence",
+                        title: "TrackCut Pro licence",
                         onclick: move |_| {
                             let mut dialog = app.licence_dialog;
                             dialog.set(Some(String::new()));
                         },
-                        "Splitter"
+                        "TrackCut"
                         if matches!(*app.licence.read(), crate::licence::Status::Pro(_)) {
                             span { class: "pro-badge", "Pro" }
                         }
@@ -406,9 +406,9 @@ fn Sidebar() -> Element {
                     }
                     {
                         let (label, title) = match *app.licence.read() {
-                            crate::licence::Status::Pro(_) => ("Pro ✓", "Splitter Pro is active on this computer"),
+                            crate::licence::Status::Pro(_) => ("Pro ✓", "TrackCut Pro is active on this computer"),
                             crate::licence::Status::Renew(_) => ("Renew Pro…", "Your Pro updates ended before this version: renew or paste a new key"),
-                            _ => ("Get Pro…", "Buy Splitter Pro, or paste your licence key"),
+                            _ => ("Get Pro…", "Buy TrackCut Pro, or paste your licence key"),
                         };
                         rsx! {
                             button {
@@ -541,7 +541,7 @@ fn Editor() -> Element {
             let scan = ScanRef(scan.clone());
             // A file is split as a video or as audio, never both: a video shows its picture and
             // a timeline without the waveform, and exports video clips.
-            let video = splitter_core::is_video(&rec.path).then(|| rec.path.clone());
+            let video = trackcut_core::is_video(&rec.path).then(|| rec.path.clone());
             rsx! {
                 Info { scan: scan.clone() }
                 // A video shows its picture where a recording shows its overview waveform.
@@ -710,7 +710,7 @@ fn LicenceDialog() -> Element {
     rsx! {
         div { class: "modal-backdrop", onclick: move |_| close(),
             div { class: "modal", onclick: move |e| e.stop_propagation(),
-                h2 { "Splitter Pro" }
+                h2 { "TrackCut Pro" }
                 match &status {
                     Status::Pro(l) => rsx! {
                         p { "Licensed to " strong { "{l.email}" } "." }
@@ -724,15 +724,15 @@ fn LicenceDialog() -> Element {
                         }
                     },
                     Status::Unavailable => rsx! {
-                        p { class: "dim", "This build of Splitter can't check licences. Download it from mayorana.ch to use one." }
+                        p { class: "dim", "This build of TrackCut can't check licences. Download it from mayorana.ch to use one." }
                     },
                     Status::Free => rsx! {
                         p {
-                            "The free version exports the first {splitter_core::license::FREE_TRACKS} tracks of each recording. "
-                            "Splitter Pro exports all of them."
+                            "The free version exports the first {trackcut_core::license::FREE_TRACKS} tracks of each recording. "
+                            "TrackCut Pro exports all of them."
                         }
                         p { class: "dim",
-                            "Paste the licence key from the email you received after buying Splitter Pro. "
+                            "Paste the licence key from the email you received after buying TrackCut Pro. "
                             "It's checked on this computer; nothing is sent anywhere."
                         }
                     },
@@ -776,7 +776,7 @@ fn LicenceDialog() -> Element {
                     }
                     if !matches!(status, Status::Pro(_)) {
                         a { class: "button-link", href: "{licence::BUY_URL}", target: "_blank",
-                            if matches!(status, Status::Renew(_)) { "Renew…" } else { "Buy Splitter Pro…" }
+                            if matches!(status, Status::Renew(_)) { "Renew…" } else { "Buy TrackCut Pro…" }
                         }
                     }
                     button { onclick: move |_| close(), if matches!(status, Status::Pro(_)) { "Close" } else { "Cancel" } }
@@ -831,7 +831,7 @@ fn DeleteDialog() -> Element {
                 p { class: "delete-name", "{name}" }
                 p { class: "dim",
                     "The file goes to the system Trash, so you can still restore it from there."
-                    if edits { " Its splits and titles in Splitter are removed." }
+                    if edits { " Its splits and titles in TrackCut are removed." }
                     " Tracks you already exported are not touched."
                 }
                 div { class: "modal-actions",
@@ -1270,7 +1270,7 @@ fn tick_step(span: f64) -> f64 {
 fn Detail(scan: ScanRef) -> Element {
     let app = use_context::<state::App>();
     // A video is split on a plain timeline: its picture is on top, and no waveform is drawn.
-    let waveform = !app.selected_path().is_some_and(|p| splitter_core::is_video(&p));
+    let waveform = !app.selected_path().is_some_and(|p| trackcut_core::is_video(&p));
     let rate = scan.0.info.sample_rate as f64;
     let v = (app.view)();
     let start = v.start;
@@ -1509,7 +1509,7 @@ fn ExportBar(scan: ScanRef) -> Element {
     let dropped = edit.splits.len() + 1 - kept;
     // Without Pro the export stops after the first tracks; the size, loudness and count
     // below describe what is actually written.
-    planned.truncate(splitter_core::license::exported_tracks(kept, app.licence.read().exports_all()));
+    planned.truncate(trackcut_core::license::exported_tracks(kept, app.licence.read().exports_all()));
     let count = planned.len();
     let beyond_free = kept - count;
     let status = app.exports.read().get(&key).cloned();
@@ -1532,7 +1532,7 @@ fn ExportBar(scan: ScanRef) -> Element {
     };
     let size = fmt_bytes(bytes);
     // A video is exported as video clips only: its own formats, no A/B of audio formats.
-    let video = splitter_core::is_video(&path);
+    let video = trackcut_core::is_video(&path);
     let video_profile = cutlist.export.video;
     let video_idx = VideoProfile::CHOICES.iter().position(|p| *p == video_profile).unwrap_or(0);
     let warnings = if video { Vec::new() } else { profile.warnings(&facts) };
@@ -1624,12 +1624,12 @@ fn ExportBar(scan: ScanRef) -> Element {
             if beyond_free > 0 {
                 button {
                     class: "pro-upsell",
-                    title: "The free version exports the first {splitter_core::license::FREE_TRACKS} tracks of a recording",
+                    title: "The free version exports the first {trackcut_core::license::FREE_TRACKS} tracks of a recording",
                     onclick: move |_| {
                         let mut dialog = app.licence_dialog;
                         dialog.set(Some(String::new()));
                     },
-                    "Splitter Pro exports all {kept} →"
+                    "TrackCut Pro exports all {kept} →"
                 }
             }
             match set {

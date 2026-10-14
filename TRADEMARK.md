@@ -1,12 +1,12 @@
 # Trademark and Brand Policy
 
-The source code of Splitter is licensed under the PolyForm Noncommercial
+The source code of TrackCut is licensed under the PolyForm Noncommercial
 License 1.0.0 (see [LICENSE](LICENSE)). **This policy covers what that licence
 deliberately does not grant: the name and the brand.**
 
 ## What this covers
 
-- The names **"Splitter"**, **"splitter"**, **"Bennekrouf"**, and **"Mayorana"**.
+- The names **"TrackCut"**, **"trackcut"**, **"Bennekrouf"**, and **"Mayorana"**.
 - The project logo and application icons, including `assets/icon.svg`,
   `assets/icon.png`, and any icon derived or generated from them (such as the
   `assets/icon.ico` produced during the Windows build).
@@ -23,12 +23,12 @@ should be read as granting one.
   fine and needs no permission.
 - Keep the branding intact in an unmodified copy of the software that you use
   under the terms of LICENSE.
-- Say that your work is "compatible with Splitter" or "built for Splitter",
+- Say that your work is "compatible with TrackCut" or "built for TrackCut",
   provided you do not imply that it is produced, endorsed, or supported by us.
 
 ## What you may not do
 
-- Ship a modified build under the name "Splitter", or under any name
+- Ship a modified build under the name "TrackCut", or under any name
   confusingly similar to it. **Fork it, rebrand it** — change the product name
   and replace the icon assets.
 - Use the logo or icons as the identity of your own product, service, or

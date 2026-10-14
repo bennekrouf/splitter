@@ -1,4 +1,4 @@
-//! `splitter.cutlist.json`: all edits for a folder, keyed by file name so the folder can move.
+//! `trackcut.cutlist.json`: all edits for a folder, keyed by file name so the folder can move.
 
 use crate::edit::RecordingEdit;
 use crate::export::ExportSettings;
@@ -6,7 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub const FILE_NAME: &str = "splitter.cutlist.json";
+pub const FILE_NAME: &str = "trackcut.cutlist.json";
+
+/// What the cutlist was called while the app was Splitter. Still read, so a
+/// folder edited before the rename opens with its edits; the first save moves
+/// it to `FILE_NAME`.
+pub const LEGACY_FILE_NAME: &str = "splitter.cutlist.json";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cutlist {
@@ -25,11 +30,14 @@ impl Default for Cutlist {
 impl Cutlist {
     /// The folder's cutlist, or an empty one if there is none yet.
     pub fn load(dir: &Path) -> std::io::Result<Self> {
-        match std::fs::read(dir.join(FILE_NAME)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e),
+        for name in [FILE_NAME, LEGACY_FILE_NAME] {
+            match std::fs::read(dir.join(name)) {
+                Ok(bytes) => return serde_json::from_slice(&bytes).map_err(std::io::Error::other),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            }
         }
+        Ok(Self::default())
     }
 
     /// Write atomically, so a crash mid-save never leaves a truncated cutlist.
@@ -37,7 +45,11 @@ impl Cutlist {
         let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
         let tmp = dir.join(format!(".{FILE_NAME}.tmp"));
         std::fs::write(&tmp, json)?;
-        std::fs::rename(tmp, dir.join(FILE_NAME))
+        std::fs::rename(tmp, dir.join(FILE_NAME))?;
+        match std::fs::remove_file(dir.join(LEGACY_FILE_NAME)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -48,7 +60,7 @@ mod tests {
 
     #[test]
     fn round_trips() {
-        let dir = std::env::temp_dir().join(format!("splitter-cutlist-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("trackcut-cutlist-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(Cutlist::load(&dir).unwrap(), Cutlist::default());
 
@@ -57,6 +69,24 @@ mod tests {
         e.insert(Split::confirmed(44100));
         c.recordings.insert("set.mp3".into(), e);
         c.save(&dir).unwrap();
+        assert_eq!(Cutlist::load(&dir).unwrap(), c);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reads_a_cutlist_saved_before_the_rename_and_moves_it() {
+        let dir = std::env::temp_dir().join(format!("trackcut-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = Cutlist::default();
+        let mut e = RecordingEdit::default();
+        e.insert(Split::confirmed(44100));
+        c.recordings.insert("set.mp3".into(), e);
+        std::fs::write(dir.join(LEGACY_FILE_NAME), serde_json::to_vec(&c).unwrap()).unwrap();
+
+        assert_eq!(Cutlist::load(&dir).unwrap(), c);
+        c.save(&dir).unwrap();
+        assert!(dir.join(FILE_NAME).exists());
+        assert!(!dir.join(LEGACY_FILE_NAME).exists());
         assert_eq!(Cutlist::load(&dir).unwrap(), c);
         std::fs::remove_dir_all(dir).unwrap();
     }

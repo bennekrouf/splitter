@@ -52,7 +52,7 @@ use std::time::Duration;
 
 /// The product name the statistics are filed under, matching its folder
 /// under mayorana.ch/downloads/.
-const APP: &str = "splitter";
+const APP: &str = "trackcut";
 const SCHEMA: u32 = 1;
 
 /// Where batches go. Baked in by the release workflow; absent in a development
@@ -362,7 +362,9 @@ static FLUSHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// for notice dismissals — so each product keeps its own identity and its own
 /// answer, and none of it lives in an app's own settings or caches.
 fn dir() -> PathBuf {
-    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("mayorana").join("telemetry").join(APP)
+    // Still the app's old name: the folder holds the install's identity and the
+    // person's answer, and a new folder would forget a "turn it off".
+    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("mayorana").join("telemetry").join("splitter")
 }
 
 /// Write to a temporary file in the same directory, then rename it into place.

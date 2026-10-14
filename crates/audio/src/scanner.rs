@@ -35,7 +35,7 @@ impl Scanner {
         let (tx, events) = crossbeam_channel::unbounded();
         let q = queue.clone();
         std::thread::Builder::new()
-            .name("splitter-scan".into())
+            .name("trackcut-scan".into())
             .spawn(move || worker(q, tx))
             .expect("spawn scan thread");
         Self { queue, events }
@@ -113,7 +113,7 @@ fn worker(queue: Arc<(Mutex<Queues>, Condvar)>, tx: Sender<ScanEvent>) {
                 Ok(map) => ScanEvent::Loudness(path, Arc::new(map)),
                 Err(e) => {
                     // Loudness is informational; the file stays fully usable without it.
-                    eprintln!("splitter: loudness analysis failed for {}: {e:#}", path.display());
+                    eprintln!("trackcut: loudness analysis failed for {}: {e:#}", path.display());
                     continue;
                 }
             },
