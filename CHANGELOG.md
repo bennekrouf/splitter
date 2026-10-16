@@ -15,6 +15,14 @@ Each heading is dated on the day its tag was pushed. Releases that carried only
 build or packaging work say so rather than being hidden: the version numbers a
 user sees in the update prompt should all be accounted for.
 
+## [Unreleased]
+
+### Added
+
+- Light mode. TrackCut now matches your computer's light or dark setting and
+  follows it when it changes. The sun/moon button at the top right switches
+  between the two. The video frame stays black in both.
+
 ## [0.1.20] - 2026-10-14
 
 ### Changed

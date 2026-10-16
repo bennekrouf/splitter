@@ -10,6 +10,7 @@ mod media_server;
 mod review;
 mod state;
 mod telemetry;
+mod theme;
 mod tools;
 mod update_check;
 mod video;

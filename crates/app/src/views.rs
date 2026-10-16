@@ -251,6 +251,7 @@ pub fn App() -> Element {
 
     rsx! {
         style { {CSS} }
+        crate::theme::ThemeToggle {}
         div {
             class: if sidebar_drag() { "app resizing" } else { "app" },
             style: "grid-template-columns: {sidebar_width}px 1fr",
